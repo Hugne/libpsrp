@@ -155,7 +155,7 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 2.2.5.2.9 | Extended Properties | todo | todo | |
 | 2.2.5.3 | Miscellaneous | todo | todo | |
 | 2.2.5.3.1 | Property Name | todo | todo | |
-| 2.2.5.3.2 | Encoding Strings | todo | todo | |
+| 2.2.5.3.2 | Encoding Strings | done | done | matches real PowerShell, incl. underscore-before-x rule and surrogate escapes |
 | 2.2.5.3.3 | Lifetime of a Serializer/Deserializer Pair | todo | todo | |
 | 2.2.5.3.4 | Structure of Complex Objects | todo | todo | |
 | 2.2.5.3.4.1 | Adapted Properties | todo | todo | |
