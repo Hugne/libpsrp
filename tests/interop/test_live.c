@@ -84,6 +84,14 @@ static int pump_until(psrp_session_t *s, psrp_transport_t *t,
     }
 }
 
+/* Pops whatever the session has queued. The disconnect and reconnect paths
+ * raise a pool state event each; nothing here needs to inspect them. */
+static void drain_events(psrp_session_t *s)
+{
+    psrp_event_t e;
+    while (psrp_session_next_event(s, &e) == PSRP_OK) psrp_event_free(&e);
+}
+
 int main(void)
 {
     const char *enabled = getenv("PSRP_INTEROP");
@@ -131,9 +139,8 @@ int main(void)
     /* Report the machine's time zone, so a real server gets to validate the
      * MS-NRBF blob rather than only our own parser doing so. */
     if (psrp_session_send_timezone(s) != PSRP_OK) {
-        printf("could not read the local time zone\n");
-        psrp_session_free(s);
-        return 1;
+        printf("FAIL: could not read the local time zone\n");
+        goto done;
     }
 
     if (psrp_session_open_payload(s, &payload) != PSRP_OK) {
@@ -182,8 +189,73 @@ int main(void)
     } else {
         printf("output: <none>\n");
     }
+    if (state != PSRP_INVOCATION_COMPLETED || out_text.len <= 1) {
+        printf("FAIL: first pipeline state %d, %zu bytes of output\n",
+               state, out_text.len);
+        goto done;
+    }
 
-    /* 5. Close the pool explicitly (wxf:Delete, 3.1.4.2) so the server tears
+    /* 5. Disconnect and come back (3.1.4.9, 3.1.4.10.2). The shell keeps
+     *    running on the server in between, so this is the one part of the
+     *    protocol that cannot be checked without a real server. */
+    printf("disconnecting\n");
+    if (psrp_transport_disconnect(t, 60000) != PSRP_OK) {
+        printf("FAIL: disconnect: %s\n", psrp_transport_last_error(t));
+        goto done;
+    }
+    if (psrp_session_notify_disconnected(s) != PSRP_OK) {
+        printf("FAIL: session did not accept the disconnect\n");
+        goto done;
+    }
+    drain_events(s);
+    if (psrp_session_pool_state(s) != PSRP_RUNSPACE_DISCONNECTED) {
+        printf("FAIL: pool state %d after disconnect\n",
+               psrp_session_pool_state(s));
+        goto done;
+    }
+
+    printf("reconnecting\n");
+    if (psrp_transport_reconnect(t) != PSRP_OK) {
+        printf("FAIL: reconnect: %s\n", psrp_transport_last_error(t));
+        goto done;
+    }
+    if (psrp_session_notify_reconnected(s) != PSRP_OK) {
+        printf("FAIL: session did not accept the reconnect\n");
+        goto done;
+    }
+    drain_events(s);
+    if (psrp_session_pool_state(s) != PSRP_RUNSPACE_OPENED) {
+        printf("FAIL: pool state %d after reconnect\n",
+               psrp_session_pool_state(s));
+        goto done;
+    }
+
+    /* 6. The pool still works: run something else through it. */
+    psrp_command_free(cmd);
+    cmd = psrp_command_new("2 + 2", true);
+    if (!cmd) { printf("FAIL: command_new\n"); goto done; }
+    psrp_buffer_reset(&payload);
+    psrp_buffer_reset(&out_text);
+    if (psrp_session_pipeline_payload(s, &cmd, 1, &pipeline_id, &payload)
+        != PSRP_OK) {
+        printf("FAIL: pipeline_payload after reconnect\n"); goto done;
+    }
+    printf("running 2 + 2 on the reconnected pool\n");
+    if (psrp_transport_run_command(t, &pipeline_id, payload.data, payload.len)
+        != PSRP_OK) {
+        printf("FAIL: run_command after reconnect: %s\n",
+               psrp_transport_last_error(t));
+        goto done;
+    }
+    state = pump_until(s, t, PSRP_EVENT_PIPELINE_STATE, 60000, &out_text);
+    while (state >= 0 && !psrp_invocation_state_is_terminal(state))
+        state = pump_until(s, t, PSRP_EVENT_PIPELINE_STATE, 60000, &out_text);
+    if (out_text.len) {
+        if (psrp_buffer_append_u8(&out_text, 0) == PSRP_OK)
+            printf("output: \"%s\"\n", (const char *)out_text.data);
+    }
+
+    /* 7. Close the pool explicitly (wxf:Delete, 3.1.4.2) so the server tears
      *    the shell down now rather than waiting for an idle timeout. */
     if (psrp_transport_close_shell(t) != PSRP_OK) {
         printf("FAIL: close shell: %s\n", psrp_transport_last_error(t));

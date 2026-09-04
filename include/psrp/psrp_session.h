@@ -108,6 +108,41 @@ psrp_result_t psrp_session_send_timezone(psrp_session_t *s);
 
 psrp_result_t psrp_session_open_payload(psrp_session_t *s, psrp_buffer_t *out);
 
+/* ------------------- disconnect and reconnect (3.1.4.9, 3.1.4.10) ------ */
+/*
+ * A disconnected RunspacePool keeps running on the server. The same client can
+ * come back to it with a wxf:Reconnect, or a different client can adopt it
+ * with a wxf:Connect after discovering its ShellID.
+ *
+ * The transport owns those three messages; the session owns the state they
+ * imply, so it is told the outcome rather than performing the exchange.
+ */
+
+/* Adopts an existing pool. The identifier is the ShellID of the pool being
+ * connected to (3.1.1.2.4), discovered by enumerating the server's shells.
+ * Only valid before the session has sent anything. */
+psrp_result_t psrp_session_adopt_pool(psrp_session_t *s, const psrp_guid_t *id);
+
+/* 3.1.4.10.3 steps 3 and 4. Produces the open content for a wxf:Connect:
+ * SESSION_CAPABILITY followed by CONNECT_RUNSPACEPOOL. The pool must be in
+ * BeforeOpen or Connecting; it ends in NegotiationSent. */
+psrp_result_t psrp_session_connect_payload(psrp_session_t *s,
+                                           psrp_buffer_t *out);
+
+/* 3.1.4.9 step 3. The transport reports a wxf:DisconnectResponse. The pool and
+ * every pipeline in it become Disconnected. A pool that is not Opened ignores
+ * the request, which the spec asks for explicitly, so this returns PSRP_OK
+ * without changing anything. */
+psrp_result_t psrp_session_notify_disconnected(psrp_session_t *s);
+
+/* 3.1.4.10.2 step 2. The transport reports a wxf:ReconnectResponse. The pool
+ * returns to Opened and its pipelines to Running. */
+psrp_result_t psrp_session_notify_reconnected(psrp_session_t *s);
+
+/* A wxf:Fault during any of these breaks the pool (3.1.4.9 step 3,
+ * 3.1.4.10.2 step 2, 3.1.5.3.13). */
+psrp_result_t psrp_session_notify_fault(psrp_session_t *s, const char *reason);
+
 /* Builds CREATE_PIPELINE for `count` commands and allocates the pipeline id.
  * The bytes go in the transport's run-command request. */
 psrp_result_t psrp_session_pipeline_payload(psrp_session_t *s,

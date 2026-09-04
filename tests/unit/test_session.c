@@ -1270,6 +1270,218 @@ PSRP_TEST(unrequested_session_key_is_refused)
     psrp_session_free(s);
 }
 
+/* -------------------- disconnect and reconnect (3.1.4.9, 3.1.4.10) ------ */
+
+PSRP_TEST(disconnect_takes_the_pool_and_its_pipelines_with_it)
+{
+    psrp_session_t *s = psrp_session_new();
+    psrp_guid_t pid;
+    psrp_event_t e;
+    int32_t st = -1;
+
+    ASSERT_NOT_NULL(s);
+    start_pipeline(s, &pid);
+
+    ASSERT_OK(psrp_session_notify_disconnected(s));
+    expect_event(s, PSRP_EVENT_POOL_STATE, &e);
+    ASSERT_EQ_I(e.state, PSRP_RUNSPACE_DISCONNECTED);
+    psrp_event_free(&e);
+    ASSERT_EQ_I(psrp_session_pool_state(s), PSRP_RUNSPACE_DISCONNECTED);
+
+    /* The pipeline keeps running on the server, so it stays in the table
+     * rather than being released the way a completed one is. */
+    ASSERT_EQ_SZ(psrp_session_pipeline_count(s), 1u);
+    ASSERT_OK(psrp_session_pipeline_state(s, &pid, &st));
+    ASSERT_EQ_I(st, PSRP_INVOCATION_DISCONNECTED);
+
+    psrp_session_free(s);
+}
+
+PSRP_TEST(disconnect_is_ignored_unless_the_pool_is_opened)
+{
+    /* 3.1.4.9 says the client ignores the request outright. */
+    psrp_session_t *s = psrp_session_new();
+    psrp_event_t e;
+
+    ASSERT_NOT_NULL(s);
+    ASSERT_OK(psrp_session_notify_disconnected(s));
+    ASSERT_ERR(psrp_session_next_event(s, &e), PSRP_ERR_NOT_FOUND);
+    ASSERT_EQ_I(psrp_session_pool_state(s), PSRP_RUNSPACE_BEFORE_OPEN);
+    psrp_session_free(s);
+}
+
+PSRP_TEST(reconnect_restores_the_pool_and_its_pipelines)
+{
+    psrp_session_t *s = psrp_session_new();
+    psrp_guid_t pid;
+    psrp_event_t e;
+    psrp_value_t v;
+    int32_t st = -1;
+
+    ASSERT_NOT_NULL(s);
+    psrp_value_init(&v);
+    start_pipeline(s, &pid);
+    ASSERT_OK(psrp_session_notify_disconnected(s));
+    expect_event(s, PSRP_EVENT_POOL_STATE, &e);
+    psrp_event_free(&e);
+
+    /* While disconnected the pipeline will not take input. */
+    ASSERT_OK(psrp_value_set_string(&v, "x"));
+    ASSERT_ERR(psrp_session_send_input(s, &pid, &v), PSRP_ERR_STATE);
+
+    ASSERT_OK(psrp_session_notify_reconnected(s));
+    expect_event(s, PSRP_EVENT_POOL_STATE, &e);
+    ASSERT_EQ_I(e.state, PSRP_RUNSPACE_OPENED);
+    psrp_event_free(&e);
+
+    ASSERT_OK(psrp_session_pipeline_state(s, &pid, &st));
+    ASSERT_EQ_I(st, PSRP_INVOCATION_RUNNING);
+    ASSERT_OK(psrp_session_send_input(s, &pid, &v));
+
+    psrp_value_free(&v);
+    psrp_session_free(s);
+}
+
+PSRP_TEST(reconnect_does_not_revive_a_finished_pipeline)
+{
+    /* Only pipelines the disconnect suspended come back. One that genuinely
+     * completed before the disconnect is gone, and must stay gone. */
+    psrp_session_t *s = psrp_session_new();
+    psrp_guid_t done_pid, live_pid;
+    psrp_event_t e;
+    int32_t st = -1;
+
+    ASSERT_NOT_NULL(s);
+    start_pipeline(s, &done_pid);
+    {
+        psrp_command_t *cmd = psrp_command_new("Get-Other", true);
+        psrp_buffer_t wire;
+        ASSERT_NOT_NULL(cmd);
+        psrp_buffer_init(&wire);
+        ASSERT_OK(psrp_session_pipeline_payload(s, &cmd, 1, &live_pid, &wire));
+        psrp_buffer_free(&wire);
+        psrp_command_free(cmd);
+    }
+    ASSERT_EQ_SZ(psrp_session_pipeline_count(s), 2u);
+
+    server_send(s, PSRP_MSG_PIPELINE_STATE, &done_pid,
+                pipeline_state_xml(PSRP_INVOCATION_COMPLETED), 0);
+    expect_event(s, PSRP_EVENT_PIPELINE_STATE, &e);
+    psrp_event_free(&e);
+    ASSERT_EQ_SZ(psrp_session_pipeline_count(s), 1u);
+
+    ASSERT_OK(psrp_session_notify_disconnected(s));
+    expect_event(s, PSRP_EVENT_POOL_STATE, &e);
+    psrp_event_free(&e);
+    ASSERT_OK(psrp_session_notify_reconnected(s));
+    expect_event(s, PSRP_EVENT_POOL_STATE, &e);
+    psrp_event_free(&e);
+
+    ASSERT_ERR(psrp_session_pipeline_state(s, &done_pid, &st),
+               PSRP_ERR_NOT_FOUND);
+    ASSERT_OK(psrp_session_pipeline_state(s, &live_pid, &st));
+    ASSERT_EQ_I(st, PSRP_INVOCATION_RUNNING);
+    psrp_session_free(s);
+}
+
+PSRP_TEST(reconnect_requires_a_disconnected_pool)
+{
+    psrp_session_t *s = psrp_session_new();
+    ASSERT_NOT_NULL(s);
+    ASSERT_ERR(psrp_session_notify_reconnected(s), PSRP_ERR_STATE);
+    open_pool(s);
+    ASSERT_ERR(psrp_session_notify_reconnected(s), PSRP_ERR_STATE);
+    psrp_session_free(s);
+}
+
+PSRP_TEST(a_fault_breaks_the_pool)
+{
+    psrp_session_t *s = psrp_session_new();
+    psrp_event_t e;
+
+    ASSERT_NOT_NULL(s);
+    open_pool(s);
+    ASSERT_OK(psrp_session_notify_fault(s, "wsa:DestinationUnreachable"));
+    expect_event(s, PSRP_EVENT_POOL_STATE, &e);
+    ASSERT_EQ_I(e.state, PSRP_RUNSPACE_BROKEN);
+    ASSERT_EQ_STR(e.text, "wsa:DestinationUnreachable");
+    psrp_event_free(&e);
+
+    /* A second fault does not re-report; the pool is already broken. */
+    ASSERT_OK(psrp_session_notify_fault(s, "again"));
+    ASSERT_ERR(psrp_session_next_event(s, &e), PSRP_ERR_NOT_FOUND);
+    psrp_session_free(s);
+}
+
+PSRP_TEST(connect_payload_carries_capability_and_connect)
+{
+    /* 3.1.4.10.3 steps 3 and 4. */
+    psrp_session_t *s = psrp_session_new();
+    psrp_guid_t adopted;
+    psrp_buffer_t wire;
+    psrp_message_t msgs[4];
+    psrp_buffer_t bodies[4];
+    size_t n;
+
+    ASSERT_NOT_NULL(s);
+    ASSERT_OK(psrp_guid_generate(&adopted));
+    ASSERT_OK(psrp_session_adopt_pool(s, &adopted));
+    ASSERT_EQ_I(psrp_session_pool_state(s), PSRP_RUNSPACE_CONNECTING);
+    ASSERT_TRUE(psrp_guid_equal(psrp_session_pool_id(s), &adopted));
+
+    psrp_buffer_init(&wire);
+    ASSERT_OK(psrp_session_connect_payload(s, &wire));
+    ASSERT_EQ_I(psrp_session_pool_state(s), PSRP_RUNSPACE_NEGOTIATION_SENT);
+
+    n = decode_all(&wire, msgs, bodies, 4);
+    ASSERT_EQ_SZ(n, 2u);
+    ASSERT_EQ_SZ(msgs[0].type, PSRP_MSG_SESSION_CAPABILITY);
+    ASSERT_EQ_SZ(msgs[1].type, PSRP_MSG_CONNECT_RUNSPACEPOOL);
+    /* Both are addressed to the pool being adopted, not to a fresh one. */
+    ASSERT_TRUE(psrp_guid_equal(&msgs[1].rpid, &adopted));
+    free_bodies(bodies, n);
+
+    /* 2.2.2.29 is sent once. */
+    psrp_buffer_reset(&wire);
+    ASSERT_ERR(psrp_session_connect_payload(s, &wire), PSRP_ERR_STATE);
+
+    psrp_buffer_free(&wire);
+    psrp_session_free(s);
+}
+
+PSRP_TEST(adopting_a_pool_is_only_valid_before_opening)
+{
+    psrp_session_t *s = psrp_session_new();
+    psrp_guid_t id;
+
+    ASSERT_NOT_NULL(s);
+    ASSERT_OK(psrp_guid_generate(&id));
+    ASSERT_ERR(psrp_session_adopt_pool(s, &psrp_guid_empty),
+               PSRP_ERR_INVALID_ARG);
+    open_pool(s);
+    ASSERT_ERR(psrp_session_adopt_pool(s, &id), PSRP_ERR_STATE);
+    psrp_session_free(s);
+}
+
+PSRP_TEST(pool_init_data_reports_the_servers_bounds)
+{
+    /* 3.1.5.4.30: the answer to CONNECT_RUNSPACEPOOL says what the pool
+     * actually has, which need not be what the connecting client asked for. */
+    psrp_session_t *s = psrp_session_new();
+    psrp_event_t e;
+
+    ASSERT_NOT_NULL(s);
+    open_pool(s);
+    server_send(s, PSRP_MSG_RUNSPACEPOOL_INIT_DATA, NULL,
+                "<Obj RefId=\"0\"><MS><I32 N=\"MinRunspaces\">2</I32>"
+                "<I32 N=\"MaxRunspaces\">9</I32></MS></Obj>", 0);
+    expect_event(s, PSRP_EVENT_POOL_INIT_DATA, &e);
+    ASSERT_EQ_I(e.state, 2);
+    ASSERT_TRUE(e.count == 9);
+    psrp_event_free(&e);
+    psrp_session_free(s);
+}
+
 static const psrp_test_case_t cases[] = {
     PSRP_TEST_CASE(session_starts_before_open_with_a_pool_id),
     PSRP_TEST_CASE(session_pool_ids_are_unique),
@@ -1309,6 +1521,15 @@ static const psrp_test_case_t cases[] = {
     PSRP_TEST_CASE(session_key_timeout_breaks_the_pool),
     PSRP_TEST_CASE(ticking_without_an_exchange_does_nothing),
     PSRP_TEST_CASE(unrequested_session_key_is_refused),
+    PSRP_TEST_CASE(disconnect_takes_the_pool_and_its_pipelines_with_it),
+    PSRP_TEST_CASE(disconnect_is_ignored_unless_the_pool_is_opened),
+    PSRP_TEST_CASE(reconnect_restores_the_pool_and_its_pipelines),
+    PSRP_TEST_CASE(reconnect_does_not_revive_a_finished_pipeline),
+    PSRP_TEST_CASE(reconnect_requires_a_disconnected_pool),
+    PSRP_TEST_CASE(a_fault_breaks_the_pool),
+    PSRP_TEST_CASE(connect_payload_carries_capability_and_connect),
+    PSRP_TEST_CASE(adopting_a_pool_is_only_valid_before_opening),
+    PSRP_TEST_CASE(pool_init_data_reports_the_servers_bounds),
 };
 
 PSRP_TEST_MAIN(cases)

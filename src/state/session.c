@@ -73,11 +73,12 @@ struct psrp_session {
     event_node_t *ev_tail;
 };
 
-/* Defined further down, next to the other send paths; declared here because
- * the key exchange needs it and sits above it. */
+/* Both are defined further down, next to the code they belong with; declared
+ * here because the key exchange and the connect paths sit above them. */
 static psrp_result_t emit(psrp_session_t *s, psrp_buffer_t *out, uint32_t type,
                           const psrp_guid_t *pipeline_id,
                           const void *data, size_t len);
+static char *dup_cstr(const char *s);
 
 void psrp_event_free(psrp_event_t *e)
 {
@@ -404,6 +405,115 @@ static psrp_result_t emit(psrp_session_t *s, psrp_buffer_t *out, uint32_t type,
         rc = psrp_fragment_split(out, s->next_object_id++, msg.data, msg.len, 0);
     psrp_buffer_free(&msg);
     return rc;
+}
+
+/* ---------------------- disconnect and reconnect (3.1.4.9, 3.1.4.10) ---- */
+
+psrp_result_t psrp_session_adopt_pool(psrp_session_t *s, const psrp_guid_t *id)
+{
+    if (!s || !id) return PSRP_ERR_INVALID_ARG;
+    if (s->pool_state != PSRP_RUNSPACE_BEFORE_OPEN) return PSRP_ERR_STATE;
+    if (psrp_guid_is_empty(id)) return PSRP_ERR_INVALID_ARG;
+    s->pool_id = *id;
+    /* 3.1.4.10.3 step 2: a pool being connected to starts out Connecting, not
+     * BeforeOpen, which is what makes CONNECT_RUNSPACEPOOL legal for it. */
+    s->pool_state = PSRP_RUNSPACE_CONNECTING;
+    return PSRP_OK;
+}
+
+psrp_result_t psrp_session_connect_payload(psrp_session_t *s,
+                                           psrp_buffer_t *out)
+{
+    psrp_buffer_t cap, conn;
+    psrp_result_t rc;
+
+    if (!s || !out) return PSRP_ERR_INVALID_ARG;
+    if (s->pool_state != PSRP_RUNSPACE_CONNECTING &&
+        s->pool_state != PSRP_RUNSPACE_BEFORE_OPEN)
+        return PSRP_ERR_STATE;
+
+    psrp_buffer_init(&cap);
+    psrp_buffer_init(&conn);
+
+    rc = psrp_build_session_capability(&s->local_capability, &cap);
+    /* 2.2.2.29 carries the bounds the connecting client wants; the server
+     * answers with what the pool actually has in RUNSPACEPOOL_INIT_DATA. */
+    if (rc == PSRP_OK)
+        rc = psrp_build_connect_runspacepool(s->init.min_runspaces,
+                                             s->init.max_runspaces, &conn);
+    if (rc == PSRP_OK)
+        rc = emit(s, out, PSRP_MSG_SESSION_CAPABILITY, NULL, cap.data, cap.len);
+    if (rc == PSRP_OK)
+        rc = emit(s, out, PSRP_MSG_CONNECT_RUNSPACEPOOL, NULL, conn.data,
+                  conn.len);
+
+    psrp_buffer_free(&cap);
+    psrp_buffer_free(&conn);
+
+    if (rc == PSRP_OK) s->pool_state = PSRP_RUNSPACE_NEGOTIATION_SENT;
+    return rc;
+}
+
+psrp_result_t psrp_session_notify_disconnected(psrp_session_t *s)
+{
+    pipe_node_t *p;
+    psrp_event_t e;
+
+    if (!s) return PSRP_ERR_INVALID_ARG;
+    /* 3.1.4.9: a pool that is not Opened ignores the request outright. */
+    if (s->pool_state != PSRP_RUNSPACE_OPENED) return PSRP_OK;
+
+    s->pool_state = PSRP_RUNSPACE_DISCONNECTED;
+    /* Pipelines go with it. They keep running on the server, which is the
+     * whole point, so they stay in the table rather than being released the
+     * way a Completed one is. */
+    for (p = s->pipe_head; p; p = p->next)
+        p->state = PSRP_INVOCATION_DISCONNECTED;
+
+    event_init(&e, PSRP_EVENT_POOL_STATE, PSRP_MSG_RUNSPACEPOOL_STATE, NULL);
+    e.state = PSRP_RUNSPACE_DISCONNECTED;
+    return event_push(s, &e);
+}
+
+psrp_result_t psrp_session_notify_reconnected(psrp_session_t *s)
+{
+    pipe_node_t *p;
+    psrp_event_t e;
+
+    if (!s) return PSRP_ERR_INVALID_ARG;
+    if (s->pool_state != PSRP_RUNSPACE_DISCONNECTED) return PSRP_ERR_STATE;
+
+    s->pool_state = PSRP_RUNSPACE_OPENED;
+    /* The spec names only the pool state here, but a pipeline left marked
+     * Disconnected would refuse input forever: the server never sends a
+     * PIPELINE_STATE saying a still-running pipeline resumed, because from its
+     * side nothing stopped. Only pipelines this disconnect suspended are
+     * restored, so one that genuinely finished is not revived. */
+    for (p = s->pipe_head; p; p = p->next)
+        if (p->state == PSRP_INVOCATION_DISCONNECTED)
+            p->state = PSRP_INVOCATION_RUNNING;
+
+    event_init(&e, PSRP_EVENT_POOL_STATE, PSRP_MSG_RUNSPACEPOOL_STATE, NULL);
+    e.state = PSRP_RUNSPACE_OPENED;
+    return event_push(s, &e);
+}
+
+psrp_result_t psrp_session_notify_fault(psrp_session_t *s, const char *reason)
+{
+    psrp_event_t e;
+
+    if (!s) return PSRP_ERR_INVALID_ARG;
+    /* 3.1.5.3.13: a fault is terminal. Already-dead pools stay as they are so
+     * a late fault cannot turn a clean Closed into Broken. */
+    if (s->pool_state == PSRP_RUNSPACE_CLOSED ||
+        s->pool_state == PSRP_RUNSPACE_BROKEN)
+        return PSRP_OK;
+
+    s->pool_state = PSRP_RUNSPACE_BROKEN;
+    event_init(&e, PSRP_EVENT_POOL_STATE, PSRP_MSG_RUNSPACEPOOL_STATE, NULL);
+    e.state = PSRP_RUNSPACE_BROKEN;
+    e.text = dup_cstr(reason);
+    return event_push(s, &e);
 }
 
 psrp_result_t psrp_session_send_timezone(psrp_session_t *s)

@@ -223,6 +223,34 @@ void WINAPI WSManSignalShell(
     PCWSTR code, WSMAN_SHELL_ASYNC *async,
     WSMAN_OPERATION_HANDLE *signalOperation);
 
+/* Disconnect, reconnect and connect (3.1.4.9, 3.1.4.10). The shell keeps
+ * running on the server across a disconnect, which is what lets a client come
+ * back to it or hand it to another client. */
+typedef struct _WSMAN_SHELL_DISCONNECT_INFO {
+    DWORD idleTimeoutMs;
+} WSMAN_SHELL_DISCONNECT_INFO;
+
+void WINAPI WSManDisconnectShell(
+    WSMAN_SHELL_HANDLE shell, DWORD flags,
+    WSMAN_SHELL_DISCONNECT_INFO *disconnectInfo, WSMAN_SHELL_ASYNC *async);
+
+void WINAPI WSManReconnectShell(
+    WSMAN_SHELL_HANDLE shell, DWORD flags, WSMAN_SHELL_ASYNC *async);
+
+void WINAPI WSManReconnectShellCommand(
+    WSMAN_COMMAND_HANDLE commandHandle, DWORD flags,
+    WSMAN_SHELL_ASYNC *async);
+
+void WINAPI WSManConnectShell(
+    WSMAN_SESSION_HANDLE session, DWORD flags, PCWSTR resourceUri,
+    PCWSTR shellID, WSMAN_OPTION_SET *options, WSMAN_DATA *connectXml,
+    WSMAN_SHELL_ASYNC *async, WSMAN_SHELL_HANDLE *shell);
+
+void WINAPI WSManConnectShellCommand(
+    WSMAN_SHELL_HANDLE shell, DWORD flags, PCWSTR commandID,
+    WSMAN_OPTION_SET *options, WSMAN_DATA *connectXml,
+    WSMAN_SHELL_ASYNC *async, WSMAN_COMMAND_HANDLE *command);
+
 void WINAPI WSManCloseOperation(WSMAN_OPERATION_HANDLE operationHandle,
                                 DWORD flags);
 

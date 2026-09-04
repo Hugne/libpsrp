@@ -193,7 +193,7 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 3.1.1.2.1 | GUID | done | done | pool id, random v4 from the platform CSPRNG |
 | 3.1.1.2.2 | RunspacePool State | done | done | tracked and exposed |
 | 3.1.1.2.3 | Defragmentation Data | done | done | per-session defragmenter |
-| 3.1.1.2.4 | WSMV Shell | todo | todo | |
+| 3.1.1.2.4 | WSMV Shell | done | done | the transport owns the shell handle; ShellID is the pool id |
 | 3.1.1.2.5 | RunspacePool Information CI Table | done | done | unique call identifiers; cleared by RUNSPACE_AVAILABILITY |
 | 3.1.1.2.6 | Pipeline Table | done | done | entered on create, removed on Completed/Failed/Stopped |
 | 3.1.1.2.7 | Session Key | done | done | held by the crypto context once exchanged |
@@ -202,7 +202,7 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 3.1.1.3.1 | GUID | done | done | pipeline id allocated per pipeline |
 | 3.1.1.3.2 | Pipeline State | done | done | surfaced as an event |
 | 3.1.1.3.3 | Defragmentation Data | done | done | shared session defragmenter |
-| 3.1.1.3.4 | WSMV Command | todo | todo | |
+| 3.1.1.3.4 | WSMV Command | done | done | command handle per pipeline, keyed by the pipeline GUID |
 | 3.1.2 | Timers | done | done | session key transfer timer, advanced by the caller |
 | 3.1.3 | Initialization | done | done | session construction; pool id generated |
 | 3.1.4 | Higher-Layer Triggered Events | wip | wip | create pool + execute pipeline done; the rest pending |
@@ -214,10 +214,10 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 3.1.4.6 | Setting the Minimum or Maximum Runspaces in a RunspacePool | done | done | builders + availability response |
 | 3.1.4.7 | Getting the Number of Available Runspaces in a RunspacePool | done | done | builder + availability response |
 | 3.1.4.8 | Initiating a Session Key Exchange | done | done | public key export + encrypted session key import |
-| 3.1.4.9 | Disconnecting from a RunspacePool | todo | todo | |
-| 3.1.4.10 | Connecting to a RunspacePool | todo | todo | |
-| 3.1.4.10.2 | Connecting to a RunspacePool from a Previous Client Session | todo | todo | |
-| 3.1.4.10.3 | Connecting to a RunspacePool from a New Client Session | todo | todo | |
+| 3.1.4.9 | Disconnecting from a RunspacePool | done | done | pool and pipelines to Disconnected; live-verified |
+| 3.1.4.10 | Connecting to a RunspacePool | done | done | both the previous-session and new-session paths |
+| 3.1.4.10.2 | Connecting to a RunspacePool from a Previous Client Session | done | done | reconnect; live-verified |
+| 3.1.4.10.3 | Connecting to a RunspacePool from a New Client Session | done | done | connect payload and wxf:Connect; discovery is TODO PSRP-12 |
 | 3.1.5 | Message Processing Events and Sequencing Rules | done | done | send/receive rules, WSMan binding, and sequencing verified live |
 | 3.1.5.1 | General Rules | todo | todo | |
 | 3.1.5.1.1 | Rules for Sending Data | done | done | message framing + fragmentation on send |
@@ -236,13 +236,13 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 3.1.5.3.10 | Rules for the wxf:SignalResponse Message | done | done | completion handled by the WSMan client |
 | 3.1.5.3.11 | Rules for the wxf:Delete Message | done | done | explicit shell close, verified live |
 | 3.1.5.3.12 | Rules for the wxf:DeleteResponse Message | done | done | completion handled by the WSMan client |
-| 3.1.5.3.13 | Rules for the wxf:Fault Message | todo | todo | |
-| 3.1.5.3.14 | Rules for the wxf:Connect Message | todo | todo | |
-| 3.1.5.3.15 | Rules for the wxf:ConnectResponse Message | todo | todo | |
-| 3.1.5.3.16 | Rules for the wxf:Disconnect Message | todo | todo | |
-| 3.1.5.3.17 | Rules for the wxf:DisconnectResponse Message | todo | todo | |
-| 3.1.5.3.18 | Rules for the wxf:Reconnect Message | todo | todo | |
-| 3.1.5.3.19 | Rules for the wxf:ReconnectResponse Message | todo | todo | |
+| 3.1.5.3.13 | Rules for the wxf:Fault Message | done | done | surfaced as a Broken pool with the fault text |
+| 3.1.5.3.14 | Rules for the wxf:Connect Message | done | done | WSManConnectShell with the payload as open content |
+| 3.1.5.3.15 | Rules for the wxf:ConnectResponse Message | done | done | completion drives the session state |
+| 3.1.5.3.16 | Rules for the wxf:Disconnect Message | done | done | WSManDisconnectShell with an idle timeout |
+| 3.1.5.3.17 | Rules for the wxf:DisconnectResponse Message | done | done | completion drives the session state |
+| 3.1.5.3.18 | Rules for the wxf:Reconnect Message | done | done | WSManReconnectShell; the receive re-arms |
+| 3.1.5.3.19 | Rules for the wxf:ReconnectResponse Message | done | done | completion drives the session state |
 | 3.1.5.4 | Rules for Processing PSRP Messages | done | done | state preconditions enforced on send and receive |
 | 3.1.5.4.1 | SESSION_CAPABILITY Message | done | done |  |
 | 3.1.5.4.1.1 | Sending to the Server | done | done | sent once, in the open payload; moves to NegotiationSent |
@@ -274,8 +274,8 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 3.1.5.4.26 | INFORMATION_RECORD Message | done | done | surfaced as an event |
 | 3.1.5.4.27 | PIPELINE_HOST_CALL Message | done | done | ci and method id surfaced with the parameters |
 | 3.1.5.4.28 | PIPELINE_HOST_RESPONSE Message | done | done | quotes the call's ci; goes out on the pr stream |
-| 3.1.5.4.29 | CONNECT_RUNSPACEPOOL Message | todo | todo | |
-| 3.1.5.4.30 | RUNSPACEPOOL_INIT_DATA Message | todo | todo | |
+| 3.1.5.4.29 | CONNECT_RUNSPACEPOOL Message | done | done | sent once, with SESSION_CAPABILITY, from Connecting |
+| 3.1.5.4.30 | RUNSPACEPOOL_INIT_DATA Message | done | done | surfaced with the server's actual bounds |
 | 3.1.5.4.31 | RESET_RUNSPACE_STATE Message | done | done | requires Opened; allocates a call identifier |
 | 3.1.6 | Timer Events | done | done | expiry breaks the pool and raises an event |
 | 3.1.7 | Other Local Events | todo | todo | |

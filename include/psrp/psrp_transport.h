@@ -80,6 +80,35 @@ psrp_result_t psrp_transport_stop_pipeline(psrp_transport_t *t);
  * does this anyway; call it directly when you want to observe the result. */
 psrp_result_t psrp_transport_close_shell(psrp_transport_t *t);
 
+/* ---------------- disconnect and reconnect (3.1.4.9, 3.1.4.10) --------- */
+/*
+ * A disconnected shell keeps running on the server until its idle timeout
+ * expires. The same client can reconnect to it, or another client can connect
+ * to it after discovering its ShellID.
+ *
+ * Each of these performs the wxf exchange only. Tell the session what happened
+ * with psrp_session_notify_disconnected / _reconnected / _fault, so the
+ * protocol state and the transport state cannot drift apart.
+ */
+
+/* wxf:Disconnect (3.1.5.3.16). `idle_timeout_ms` is how long the server keeps
+ * the shell alive with nobody attached; 0 asks for the server's default. */
+psrp_result_t psrp_transport_disconnect(psrp_transport_t *t,
+                                        uint32_t idle_timeout_ms);
+
+/* wxf:Reconnect (3.1.5.3.18), for the client that disconnected. */
+psrp_result_t psrp_transport_reconnect(psrp_transport_t *t);
+
+/* wxf:Connect (3.1.5.3.14), for a client adopting someone else's shell.
+ * `payload` is the SESSION_CAPABILITY and CONNECT_RUNSPACEPOOL pair from
+ * psrp_session_connect_payload, which rides in the message's open content. */
+psrp_result_t psrp_transport_connect(psrp_transport_t *t,
+                                     const psrp_guid_t *shell_id,
+                                     const void *payload, size_t len);
+
+/* True while the shell is disconnected. */
+bool psrp_transport_is_disconnected(const psrp_transport_t *t);
+
 /* True once the remote command has reported it is done. */
 bool psrp_transport_command_done(const psrp_transport_t *t);
 

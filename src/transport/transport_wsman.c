@@ -128,6 +128,11 @@ struct psrp_transport {
     WSMAN_SHELL_HANDLE shell;
     WSMAN_COMMAND_HANDLE command;
     WSMAN_OPERATION_HANDLE recv_op;
+
+    /* Disconnect state (3.1.4.9). The idle timeout has nowhere to ride in
+     * WSMAN_SHELL_ASYNC, so it waits here for the one call that reads it. */
+    bool disconnected;
+    DWORD pending_idle_timeout_ms;
     WSMAN_SHELL_ASYNC recv_async;
     WSMAN_AUTHENTICATION_CREDENTIALS auth;
     recv_ctx_t recv;
@@ -543,6 +548,157 @@ psrp_result_t psrp_transport_stop_pipeline(psrp_transport_t *t)
     if (sig) WSManCloseOperation(sig, 0);
     op_destroy(&op);
     return rc;
+}
+
+/* ---------------- disconnect and reconnect (3.1.4.9, 3.1.4.10) --------- */
+
+/* Runs one shell-level async call and reports its outcome. */
+static psrp_result_t run_shell_op(psrp_transport_t *t, const char *what,
+                                  void (*start)(psrp_transport_t *,
+                                                WSMAN_SHELL_ASYNC *))
+{
+    async_op_t op;
+    WSMAN_SHELL_ASYNC async;
+    psrp_result_t rc = PSRP_OK;
+
+    op_init(&op);
+    async.operationContext = &op;
+    async.completionFunction = generic_completion;
+    start(t, &async);
+    if (WaitForSingleObject(op.done, t->timeout_ms) != WAIT_OBJECT_0) {
+        set_error(t, what, 0, L"timed out");
+        rc = PSRP_ERR_TRANSPORT;
+    } else if (op.error != 0) {
+        set_error(t, what, op.error, op.detail);
+        rc = PSRP_ERR_TRANSPORT;
+    }
+    op_destroy(&op);
+    return rc;
+}
+
+/* The idle timeout has to reach the callback somehow and WSMAN_SHELL_ASYNC
+ * carries no room for it, so it rides on the transport for the one call. */
+static void start_disconnect(psrp_transport_t *t, WSMAN_SHELL_ASYNC *async)
+{
+    WSMAN_SHELL_DISCONNECT_INFO info;
+    info.idleTimeoutMs = t->pending_idle_timeout_ms;
+    WSManDisconnectShell(t->shell, 0,
+                         info.idleTimeoutMs ? &info : NULL, async);
+}
+
+static void start_reconnect(psrp_transport_t *t, WSMAN_SHELL_ASYNC *async)
+{
+    WSManReconnectShell(t->shell, 0, async);
+}
+
+psrp_result_t psrp_transport_disconnect(psrp_transport_t *t,
+                                        uint32_t idle_timeout_ms)
+{
+    psrp_result_t rc;
+
+    if (!t) return PSRP_ERR_INVALID_ARG;
+    if (!t->shell) return PSRP_ERR_STATE;
+    if (t->disconnected) return PSRP_ERR_STATE;
+
+    /* 3.1.4.9 step 1 waits for sends to finish. Sends here are synchronous, so
+     * by the time control returns there is nothing outstanding. The receive
+     * is different: it is a standing operation and the server tearing it down
+     * would look like a fault, so cancel it deliberately first. */
+    if (t->recv_op) {
+        EnterCriticalSection(&t->recv.lock);
+        t->recv.expect_abort = true;
+        LeaveCriticalSection(&t->recv.lock);
+        WSManCloseOperation(t->recv_op, 0);
+        t->recv_op = NULL;
+    }
+
+    t->pending_idle_timeout_ms = idle_timeout_ms;
+    rc = run_shell_op(t, "WSManDisconnectShell", start_disconnect);
+    if (rc == PSRP_OK) t->disconnected = true;
+    return rc;
+}
+
+psrp_result_t psrp_transport_reconnect(psrp_transport_t *t)
+{
+    psrp_result_t rc;
+
+    if (!t) return PSRP_ERR_INVALID_ARG;
+    if (!t->shell) return PSRP_ERR_STATE;
+    if (!t->disconnected) return PSRP_ERR_STATE;
+
+    rc = run_shell_op(t, "WSManReconnectShell", start_reconnect);
+    if (rc == PSRP_OK) {
+        t->disconnected = false;
+        /* 3.1.4.10.2 step 3: a reconnect must be followed by a Receive to
+         * start data flowing again. The receive path re-arms itself, so
+         * clearing the flag is all that is needed here. */
+        EnterCriticalSection(&t->recv.lock);
+        t->recv.expect_abort = false;
+        LeaveCriticalSection(&t->recv.lock);
+    }
+    return rc;
+}
+
+psrp_result_t psrp_transport_connect(psrp_transport_t *t,
+                                     const psrp_guid_t *shell_id,
+                                     const void *payload, size_t len)
+{
+    wchar_t shell_id_w[64];
+    wchar_t *connect_xml = NULL;
+    async_op_t op;
+    WSMAN_SHELL_ASYNC async;
+    WSMAN_DATA data;
+    WSMAN_OPTION protocol_option;
+    WSMAN_OPTION_SET options;
+    psrp_result_t rc;
+
+    if (!t || !shell_id || (len && !payload)) return PSRP_ERR_INVALID_ARG;
+    if (t->shell) return PSRP_ERR_STATE;
+
+    rc = guid_to_wide(shell_id, shell_id_w);
+    if (rc != PSRP_OK) return rc;
+    /* The open content of a Connect uses the same connectXml wrapper shape as
+     * a Create's creationXml. */
+    rc = build_creation_xml(payload, len, &connect_xml);
+    if (rc != PSRP_OK) return rc;
+
+    memset(&data, 0, sizeof data);
+    data.type = WSMAN_DATA_TYPE_TEXT;
+    data.text.buffer = connect_xml;
+    data.text.bufferLength = (DWORD)wcslen(connect_xml);
+
+    memset(&protocol_option, 0, sizeof protocol_option);
+    protocol_option.name = L"protocolversion";
+    protocol_option.value = L"2.2";
+    protocol_option.mustComply = TRUE;
+    memset(&options, 0, sizeof options);
+    options.optionsCount = 1;
+    options.options = &protocol_option;
+    options.optionsMustUnderstand = TRUE;
+
+    op_init(&op);
+    async.operationContext = &op;
+    async.completionFunction = generic_completion;
+    WSManConnectShell(t->session, 0, kResourceUri, shell_id_w, &options, &data,
+                      &async, &t->shell);
+    if (WaitForSingleObject(op.done, t->timeout_ms) != WAIT_OBJECT_0) {
+        set_error(t, "WSManConnectShell", 0, L"timed out");
+        rc = PSRP_ERR_TRANSPORT;
+    } else if (op.error != 0) {
+        set_error(t, "WSManConnectShell", op.error, op.detail);
+        rc = PSRP_ERR_TRANSPORT;
+    } else {
+        rc = PSRP_OK;
+    }
+    op_destroy(&op);
+    free(connect_xml);
+    if (rc != PSRP_OK) t->shell = NULL;
+    return rc;
+}
+
+bool psrp_transport_is_disconnected(const psrp_transport_t *t)
+{
+    return t && t->disconnected;
 }
 
 psrp_result_t psrp_transport_close_shell(psrp_transport_t *t)
