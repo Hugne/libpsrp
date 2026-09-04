@@ -4,6 +4,42 @@
 
 #include "psrp_test.h"
 
+/* Leak checking.
+ *
+ * AddressSanitizer on Windows has no leak detector: LeakSanitizer is not
+ * supported there, so an ASan build catches out-of-bounds accesses but would
+ * miss a parser that forgets to free an object graph on an error path, which
+ * is exactly the kind of bug this library is prone to. The MSVC debug CRT does
+ * track allocations, so use that instead.
+ *
+ * The check runs once at exit over the whole executable rather than per test,
+ * because a per-test snapshot would flag anything the CRT itself allocates
+ * lazily on first use. A leaking test therefore fails the executable, and the
+ * report names the allocation.
+ */
+#if defined(_MSC_VER) && defined(_DEBUG)
+#  define PSRP_TEST_LEAK_CHECK 1
+#  define _CRTDBG_MAP_ALLOC
+#  include <crtdbg.h>
+#  include <stdlib.h>
+
+void psrp_test_enable_leak_check(void)
+{
+    int flags = _CrtSetDbgFlag(_CRTDBG_REPORT_FLAG);
+    flags |= _CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF;
+    _CrtSetDbgFlag(flags);
+    /* Send the report to stderr instead of a message box, which would hang a
+     * test run with nobody there to dismiss it. */
+    _CrtSetReportMode(_CRT_WARN, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_WARN, _CRTDBG_FILE_STDERR);
+    _CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
+}
+#else
+#  define PSRP_TEST_LEAK_CHECK 0
+void psrp_test_enable_leak_check(void) { }
+#endif
+
 jmp_buf psrp_test_jmp_;
 
 static int failed_current_;
@@ -64,6 +100,8 @@ int psrp_test_run(const psrp_test_case_t *cases, size_t count, int argc, char **
     int failures = 0;
     size_t ran = 0;
 
+    psrp_test_enable_leak_check();
+
     if (argc > 1 && strcmp(argv[1], "--list") == 0) {
         for (i = 0; i < count; i++) printf("%s\n", cases[i].name);
         return 0;
@@ -80,7 +118,8 @@ int psrp_test_run(const psrp_test_case_t *cases, size_t count, int argc, char **
         return 2;
     }
 
-    printf("%zu/%zu passed\n", ran - (size_t)failures, ran);
+    printf("%zu/%zu passed%s\n", ran - (size_t)failures, ran,
+           PSRP_TEST_LEAK_CHECK ? " (leak-checked)" : "");
     fflush(stdout);
     return failures ? 1 : 0;
 }

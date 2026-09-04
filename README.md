@@ -25,6 +25,17 @@ another pipeline through the same pool:
     shell closed
 ```
 
+## Example
+
+`examples/run_command.c` is the whole shape of using the library in about a
+hundred lines:
+
+```
+example_run_command http://localhost:5985/wsman Administrator pw "Get-Date; 6*7"
+2026-09-05
+42
+```
+
 ## Hardening
 
 Everything a server sends is untrusted, so every parser is fuzzed:
@@ -39,6 +50,10 @@ The fuzzer is deterministic, so a failure reproduces from its seed. It also
 reports how often each target actually accepted its input and fails if any
 target never did: a fuzzer that only ever exercises rejection paths looks
 identical to one that found nothing.
+
+Leaks are caught separately. AddressSanitizer on Windows has no leak detector,
+so the tests and the fuzzer turn on the MSVC debug CRT's allocation tracking
+instead; a debug MSVC run reports `(leak-checked)` when it is active.
 
 ## Layout
 

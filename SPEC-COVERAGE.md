@@ -30,6 +30,8 @@ Four more entries there are genuine limits rather than divergences.
 | UTF-8 validation, UTF-8<->UTF-16 | done | done | needed for XmlLite (UTF-16) |
 | Build: CMake+Ninja, MSVC & clang, CTest | done | done | both green, warnings-as-errors |
 | Fuzzing + AddressSanitizer | done | done | every parser; ASan build runs the fuzz label and the live test |
+| Leak checking | done | done | MSVC debug CRT; ASan on Windows has no leak detector |
+| Worked example | done | done | `examples/run_command.c`, verified against a live server |
 
 
 ## Message Layer

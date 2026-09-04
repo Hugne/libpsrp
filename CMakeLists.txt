@@ -75,4 +75,7 @@ target_link_libraries(psrp PUBLIC xmllite bcrypt WsmSvc)
 if(PSRP_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)
+  # Built alongside the tests so they cannot silently rot, but they are not
+  # tests: none of them runs without a server.
+  add_subdirectory(examples)
 endif()

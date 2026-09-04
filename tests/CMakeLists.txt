@@ -52,7 +52,7 @@ set_tests_properties(interop.test_live PROPERTIES LABELS "interop" TIMEOUT 180)
 # PSRP_FUZZ_ITERATIONS and PSRP_FUZZ_SEED steer it; the defaults keep the
 # normal run to about a second while still covering every parser.
 add_executable(fuzz_parsers fuzz/fuzz_parsers.c)
-target_link_libraries(fuzz_parsers PRIVATE psrp psrp_flags)
+target_link_libraries(fuzz_parsers PRIVATE psrp psrp_testharness psrp_flags)
 target_include_directories(fuzz_parsers PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME fuzz.parsers COMMAND fuzz_parsers)
 set_tests_properties(fuzz.parsers PROPERTIES LABELS "fuzz" TIMEOUT 300)

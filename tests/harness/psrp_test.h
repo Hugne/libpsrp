@@ -47,6 +47,13 @@ void psrp_test_dump_mem_(const void *a, size_t alen, const void *b, size_t blen)
 
 int psrp_test_run(const psrp_test_case_t *cases, size_t count, int argc, char **argv);
 
+/* Turns on allocation tracking for the rest of the process; leaks are reported
+ * to stderr at exit. psrp_test_run calls this itself. It is exposed because the
+ * fuzzer has its own main and error paths are where leaks hide. A no-op unless
+ * building with the MSVC debug CRT: AddressSanitizer on Windows has no leak
+ * detector, so this is the only one available. */
+void psrp_test_enable_leak_check(void);
+
 #define PSRP_TEST(name) static void name(void)
 #define PSRP_TEST_CASE(fn) { #fn, fn }
 

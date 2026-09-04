@@ -178,7 +178,7 @@ struck at sign-off: client only.
 | 8 | Host method calls + host interface | 2.2.6, 2.2.2.15/16/27/28 | `Write-Host`/prompt round-trip to a caller-supplied host | done |
 | 9 | Crypto: public key exchange, SecureString | 2.2.2.3/4/5, 2.2.5.1.24 | PSCredential survives a round trip to a real endpoint | done |
 | 10 | Remaining messages: min/max runspaces, availability, user event, app private data, command metadata, connect/reconnect, reset | 2.2.2.6–8/11–14/29–31 | `SPEC-COVERAGE.md` has no `todo` in section 2 | done |
-| 11 | Hardening: fuzzing, sanitizers, leak checks | — | Fuzzers run clean under a sanitizer; every parser reaches real code | done |
+| 11 | Hardening: fuzzing, sanitizers, leak checks, API docs, examples | — | Fuzzers run clean; public headers documented | done |
 | 12 | Server side (if in scope) | 3.2 | Decide at sign-off — see Open Questions | struck: client only |
 
 ---

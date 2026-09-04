@@ -27,6 +27,7 @@
 #include "psrp/psrp_host.h"
 #include "psrp/psrp_timezone.h"
 #include "psrp/psrp_session.h"
+#include "psrp_test.h"
 
 /* xorshift64*, so a run reproduces from its seed on any platform. */
 static uint64_t g_state;
@@ -347,6 +348,10 @@ int main(void)
 
     if (iterations == 0) iterations = 1;
     g_state = seed ? seed : 1;
+
+    /* Error paths are where a parser forgets to free what it built so far, and
+     * this run takes millions of them. */
+    psrp_test_enable_leak_check();
 
     printf("fuzzing %u targets, %lu iterations, seed %llu\n",
            (unsigned)TARGET_COUNT, iterations, (unsigned long long)seed);
