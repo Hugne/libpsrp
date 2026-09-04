@@ -3,7 +3,7 @@
 A static C library implementing the PowerShell Remoting Protocol ([MS-PSRP]),
 built incrementally with full spec coverage as the goal.
 
-Status: **awaiting sign-off**. No implementation code written yet.
+Status: **in progress**. Signed off; see `SPEC-COVERAGE.md` for what is done.
 
 ---
 
@@ -20,7 +20,7 @@ Status: **awaiting sign-off**. No implementation code written yet.
 **Non-goals (for now, see Open Questions)**
 
 - Not a PowerShell engine. We speak the protocol; the remote end runs the code.
-- Server side (spec section 3.2) is tracked but scheduled last.
+- Server side (spec section 3.2) is out of scope; client only.
 - No cross-platform transport initially; the first transport is Win32 WSMan.
 
 ---
@@ -113,7 +113,7 @@ libpsrp/
 
 | Need | Decision | Why |
 |---|---|---|
-| XML parsing | **expat** (MIT), vendored, behind `psrp_xml.h` | CLIXML reading is where hand-rolled parsers go to die. Battle-tested, streaming, MIT. The interface lets us swap it. |
+| XML parsing | **XmlLite** (Microsoft, system component), behind `psrp_xml.h` | Signed off as the Microsoft-standard choice. Present in the Windows SDK, in llvm-mingw and as a system DLL, so nothing is downloaded or vendored. Hand-rolled XML is where subtle bugs live. Swappable via the interface (TODO PSRP-05). |
 | XML writing | in-repo | We only emit a constrained subset; trivial and avoids a dep. |
 | Base64 / hex / UTF-8 | in-repo | ~150 lines total, no dep worth taking. |
 | Crypto (RSA, AES, RNG) | **Windows CNG (BCrypt)** behind `psrp_crypto.h` | Already available, no external dep. OpenSSL/mbedTLS can slot in later. |
