@@ -6,6 +6,19 @@ Status: `todo` | `wip` | `done` | `deferred` (deferred entries MUST have a TODO.
 
 This file is the definition of "full spec coverage". Update it in the same commit as the code.
 
+**Scope: client side only.** Server sections (3.2) are marked `n/a` by design.
+
+### Infrastructure (no spec section)
+
+| Component | Impl | Tests | Notes |
+|---|---|---|---|
+| Result codes / error strings | done | done | `psrp_error.h` |
+| Byte buffer + reader (big-endian) | done | done | `psrp_buffer.h` |
+| GUID parse/format/wire layout | done | done | .NET little-endian field order verified |
+| base64 / hex | done | done | RFC 4648 vectors |
+| UTF-8 validation, UTF-8<->UTF-16 | done | done | needed for XmlLite (UTF-16) |
+| Build: CMake+Ninja, MSVC & clang, CTest | done | done | both green, warnings-as-errors |
+
 
 ## Message Layer
 
@@ -269,42 +282,44 @@ This file is the definition of "full spec coverage". Update it in the same commi
 
 ## Server Protocol Details (3.2)
 
+**Out of scope: client-side only implementation.** These rows are `n/a` by design, not deferred.
+
 | Section | Title | Impl | Tests | Notes |
 |---|---|---|---|---|
-| 3.2 | Server Details | todo | todo | |
-| 3.2.1 | Abstract Data Model | todo | todo | |
-| 3.2.1.1 | Global Data | todo | todo | |
-| 3.2.1.1.1 | WSMV ShellID to RunspacePool Table | todo | todo | |
-| 3.2.1.1.2 | WSMV CommandId to Pipeline Table | todo | todo | |
-| 3.2.1.2 | RunspacePool Data | todo | todo | |
-| 3.2.1.2.1 | GUID | todo | todo | |
-| 3.2.1.2.2 | RunspacePool State | todo | todo | |
-| 3.2.1.2.3 | Defragmentation Data | todo | todo | |
-| 3.2.1.2.4 | Queue of Outgoing Messages | todo | todo | |
-| 3.2.1.2.5 | HostInfo | todo | todo | |
-| 3.2.1.2.6 | Host Calls CI Table | todo | todo | |
-| 3.2.1.2.7 | Session Key | todo | todo | |
-| 3.2.1.2.8 | Public Key | todo | todo | |
-| 3.2.1.2.9 | Minimum and Maximum Number of Runspaces in the Pool | todo | todo | |
-| 3.2.1.2.10 | Runspace Table | todo | todo | |
-| 3.2.1.2.11 | Pending Pipelines Queue | todo | todo | |
-| 3.2.1.3 | Pipeline Data | todo | todo | |
-| 3.2.1.3.1 | GUID | todo | todo | |
-| 3.2.1.3.2 | Pipeline State | todo | todo | |
-| 3.2.1.3.3 | Defragmentation Data | todo | todo | |
-| 3.2.1.3.4 | Queue of Outgoing Messages | todo | todo | |
-| 3.2.1.3.5 | HostInfo | todo | todo | |
-| 3.2.1.3.6 | Host Calls CI Table | todo | todo | |
-| 3.2.1.4 | Runspace Data | todo | todo | |
-| 3.2.1.4.1 | Runspace State | todo | todo | |
-| 3.2.1.4.2 | Currently Running Pipeline | todo | todo | |
-| 3.2.2 | Timers | todo | todo | |
-| 3.2.3 | Initialization | todo | todo | |
-| 3.2.4 | Higher-Layer Triggered Events | todo | todo | |
-| 3.2.5 | Message Processing Events and Sequencing Rules | todo | todo | |
-| 3.2.5.1 | General Rules | todo | todo | |
-| 3.2.5.1.1 | Rules for Sending Data | todo | todo | |
-| 3.2.5.1.2 | Rules for Receiving Data | todo | todo | |
-| 3.2.5.2 | Sequencing Rules | todo | todo | |
-| 3.2.5.3 | Rules for Processing WS-Man Messages | todo | todo | |
-| 3.2.5.3.1 | Rules for the wxf:Create Message | todo | todo | |
+| 3.2 | Server Details | n/a | n/a | |
+| 3.2.1 | Abstract Data Model | n/a | n/a | |
+| 3.2.1.1 | Global Data | n/a | n/a | |
+| 3.2.1.1.1 | WSMV ShellID to RunspacePool Table | n/a | n/a | |
+| 3.2.1.1.2 | WSMV CommandId to Pipeline Table | n/a | n/a | |
+| 3.2.1.2 | RunspacePool Data | n/a | n/a | |
+| 3.2.1.2.1 | GUID | n/a | n/a | |
+| 3.2.1.2.2 | RunspacePool State | n/a | n/a | |
+| 3.2.1.2.3 | Defragmentation Data | n/a | n/a | |
+| 3.2.1.2.4 | Queue of Outgoing Messages | n/a | n/a | |
+| 3.2.1.2.5 | HostInfo | n/a | n/a | |
+| 3.2.1.2.6 | Host Calls CI Table | n/a | n/a | |
+| 3.2.1.2.7 | Session Key | n/a | n/a | |
+| 3.2.1.2.8 | Public Key | n/a | n/a | |
+| 3.2.1.2.9 | Minimum and Maximum Number of Runspaces in the Pool | n/a | n/a | |
+| 3.2.1.2.10 | Runspace Table | n/a | n/a | |
+| 3.2.1.2.11 | Pending Pipelines Queue | n/a | n/a | |
+| 3.2.1.3 | Pipeline Data | n/a | n/a | |
+| 3.2.1.3.1 | GUID | n/a | n/a | |
+| 3.2.1.3.2 | Pipeline State | n/a | n/a | |
+| 3.2.1.3.3 | Defragmentation Data | n/a | n/a | |
+| 3.2.1.3.4 | Queue of Outgoing Messages | n/a | n/a | |
+| 3.2.1.3.5 | HostInfo | n/a | n/a | |
+| 3.2.1.3.6 | Host Calls CI Table | n/a | n/a | |
+| 3.2.1.4 | Runspace Data | n/a | n/a | |
+| 3.2.1.4.1 | Runspace State | n/a | n/a | |
+| 3.2.1.4.2 | Currently Running Pipeline | n/a | n/a | |
+| 3.2.2 | Timers | n/a | n/a | |
+| 3.2.3 | Initialization | n/a | n/a | |
+| 3.2.4 | Higher-Layer Triggered Events | n/a | n/a | |
+| 3.2.5 | Message Processing Events and Sequencing Rules | n/a | n/a | |
+| 3.2.5.1 | General Rules | n/a | n/a | |
+| 3.2.5.1.1 | Rules for Sending Data | n/a | n/a | |
+| 3.2.5.1.2 | Rules for Receiving Data | n/a | n/a | |
+| 3.2.5.2 | Sequencing Rules | n/a | n/a | |
+| 3.2.5.3 | Rules for Processing WS-Man Messages | n/a | n/a | |
+| 3.2.5.3.1 | Rules for the wxf:Create Message | n/a | n/a | |

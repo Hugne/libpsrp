@@ -209,17 +209,21 @@ committed. Phases 0–6 are the critical path to a working client.
 
 ---
 
-## 10. Open questions for sign-off
+## 10. Decisions (signed off)
 
-1. **Client only, or client + server?** Full spec includes server (3.2). I
-   recommend client-first, server as phase 12 only if you want it. It roughly
-   doubles the work.
-2. **expat vendored, or hand-rolled XML reader?** I recommend expat (MIT) for
-   correctness; hand-rolling is the main "subtle bugs forever" risk.
-3. **Test harness**: tiny in-repo harness (recommended, zero deps) vs vendoring
-   `utest.h`.
-4. **Toolchains**: keep both MSVC and clang green, or MSVC only? Dual is a small
-   tax and catches real portability bugs early.
-5. **May I `pip install psrpcore`** for differential testing, and vendor expat
-   (both need one-time network fetches)?
-6. **Library name / API prefix**: `libpsrp` / `psrp_*`. Happy to change.
+1. **Client side ONLY.** Server sections (3.2) are out of scope — not deferred,
+   excluded. `SPEC-COVERAGE.md` marks them `n/a`.
+2. **XML: XmlLite** (`xmllite.h`), Microsoft's standard native XML reader.
+   Verified present in the Windows SDK, in llvm-mingw (`libxmllite.a` for
+   x86_64), and as a system DLL — so it needs no download or vendoring and both
+   toolchains stay green. It sits behind `psrp_xml.h`; a portable parser can be
+   swapped in if we ever leave Windows (tracked as PSRP-05).
+3. **Test harness: in-repo**, `tests/harness/` — zero dependencies.
+4. **Both toolchains kept green**: MSVC and clang, every phase.
+5. **`psrpcore` via pip is allowed** for differential testing (phase 3+).
+6. **Name**: `libpsrp`, API prefix `psrp_`.
+
+### Phase 12 (server) is removed
+
+The phase table's row 12 is struck: client only. "Fully implemented" means every
+client-side section in `SPEC-COVERAGE.md` is `done`.
