@@ -69,9 +69,9 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | Section | Title | Impl | Tests | Notes |
 |---|---|---|---|---|
 | 2.2.3 | Other Object Types | todo | todo | |
-| 2.2.3.1 | Coordinates | todo | todo | |
-| 2.2.3.2 | Size | todo | todo | |
-| 2.2.3.3 | Color | todo | todo | |
+| 2.2.3.1 | Coordinates | done | done | T/V wrapper, build + read |
+| 2.2.3.2 | Size | done | done | T/V wrapper, build + read |
+| 2.2.3.3 | Color | done | done | T/V wrapper; 0 accepted as Black though the spec table omits it |
 | 2.2.3.4 | RunspacePoolState | done | done | all 10 values + terminal-state helper |
 | 2.2.3.5 | PSInvocationState | done | done | all 7 values + terminal-state helper |
 | 2.2.3.6 | PSThreadOptions | done | done | enum object with type names + ToString |
@@ -85,7 +85,7 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 2.2.3.11 | Pipeline | done | done | Cmds/IsNested/History/RedirectShellErrorOutputPipe |
 | 2.2.3.12 | Command | done | done | Cmd/IsScript/UseLocalScope/merge flags/Args |
 | 2.2.3.13 | Command Parameter | done | done | named and positional (Null N) |
-| 2.2.3.14 | HostInfo | wip | wip | null-host form done; populated _hostDefaultData deferred (TODO PSRP-07) |
+| 2.2.3.14 | HostInfo | done | done | null-host and populated _hostDefaultData with all ten required keys |
 | 2.2.3.15 | ErrorRecord | done | done | message, error id, category fields |
 | 2.2.3.15.1 | InvocationInfo-specific Extended Properties | todo | todo | |
 | 2.2.3.16 | InformationalRecord (DebugRecord, WarningRecord or VerboseRecord) | done | done | message + invocation-info flag |

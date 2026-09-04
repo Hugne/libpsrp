@@ -131,11 +131,17 @@ typedef enum psrp_apartment_state {
 /* Note the wire property names carry a leading underscore (_isHostNull and
  * friends) even though the spec's prose omits it; every example in the spec
  * uses the underscored form. */
+typedef struct psrp_host_default_data psrp_host_default_data_t;
+
 typedef struct psrp_host_info {
     bool is_host_null;
     bool is_host_ui_null;
     bool is_host_raw_ui_null;
     bool use_runspace_host;
+    /* Optional console data (_hostDefaultData). NULL, the default, omits the
+     * dictionary entirely, which is the shape the spec shows for a null host.
+     * Point it at a filled-in struct to advertise a real console. Not owned. */
+    const psrp_host_default_data_t *default_data;
 } psrp_host_info_t;
 
 /* A host that implements nothing. The spec shows exactly this shape, with the

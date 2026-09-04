@@ -115,6 +115,87 @@ psrp_result_t psrp_build_host_response_error(int64_t call_id, int32_t method_id,
                                              const char *message,
                                              psrp_buffer_t *out);
 
+/* ------------------------------ host value types (2.2.3.1-3) ----------- */
+/*
+ * Coordinates, Size and Color all serialize as a "typed value" wrapper: an
+ * object with a T property naming the .NET type and a V property holding the
+ * value. Color's V is a plain int; the other two nest another object.
+ */
+
+/* 2.2.3.3, whose underlying type is System.ConsoleColor.
+ *
+ * The spec's table lists 1..15 and omits 0 entirely, but System.ConsoleColor
+ * defines 0 as Black and a server can legitimately send it -- a black
+ * foreground is not exotic. We accept and name it rather than rejecting a
+ * value the named type clearly permits. */
+typedef enum psrp_console_color {
+    PSRP_COLOR_BLACK = 0,
+    PSRP_COLOR_DARK_BLUE = 1,
+    PSRP_COLOR_DARK_GREEN = 2,
+    PSRP_COLOR_DARK_CYAN = 3,
+    PSRP_COLOR_DARK_RED = 4,
+    PSRP_COLOR_DARK_MAGENTA = 5,
+    PSRP_COLOR_DARK_YELLOW = 6,
+    PSRP_COLOR_GRAY = 7,
+    PSRP_COLOR_DARK_GRAY = 8,
+    PSRP_COLOR_BLUE = 9,
+    PSRP_COLOR_GREEN = 10,
+    PSRP_COLOR_CYAN = 11,
+    PSRP_COLOR_RED = 12,
+    PSRP_COLOR_MAGENTA = 13,
+    PSRP_COLOR_YELLOW = 14,
+    PSRP_COLOR_WHITE = 15
+} psrp_console_color_t;
+
+const char *psrp_console_color_name(int32_t color);
+
+/* Build the T/V wrappers. Each sets *out to a complex object value. */
+psrp_result_t psrp_host_make_coordinates(int32_t x, int32_t y,
+                                         psrp_value_t *out);
+psrp_result_t psrp_host_make_size(int32_t width, int32_t height,
+                                  psrp_value_t *out);
+psrp_result_t psrp_host_make_color(int32_t color, psrp_value_t *out);
+psrp_result_t psrp_host_make_string(const char *utf8, psrp_value_t *out);
+
+/* Read them back. Return PSRP_ERR_MALFORMED if the shape is wrong. */
+psrp_result_t psrp_host_read_coordinates(const psrp_value_t *v, int32_t *x,
+                                         int32_t *y);
+psrp_result_t psrp_host_read_size(const psrp_value_t *v, int32_t *width,
+                                  int32_t *height);
+psrp_result_t psrp_host_read_color(const psrp_value_t *v, int32_t *color);
+
+/* -------------------------- _hostDefaultData (2.2.3.14) ---------------- */
+
+/* The ten entries 2.2.3.14 requires when _hostDefaultData is present, keyed
+ * by the integers in its table. A client that supplies a real host fills this
+ * in; one that does not omits the whole dictionary. */
+typedef struct psrp_host_default_data {
+    int32_t foreground_color;              /* key 0, Color */
+    int32_t background_color;              /* key 1, Color */
+    int32_t cursor_position_x;             /* key 2, Coordinates */
+    int32_t cursor_position_y;
+    int32_t window_position_x;             /* key 3, Coordinates */
+    int32_t window_position_y;
+    int32_t cursor_size;                   /* key 4, Int32 */
+    int32_t buffer_width;                  /* key 5, Size */
+    int32_t buffer_height;
+    int32_t window_width;                  /* key 6, Size */
+    int32_t window_height;
+    int32_t max_window_width;              /* key 7, Size */
+    int32_t max_window_height;
+    int32_t max_physical_window_width;     /* key 8, Size */
+    int32_t max_physical_window_height;
+    const char *window_title;              /* key 9, String; not owned */
+} psrp_host_default_data_t;
+
+/* Plausible values for a headless 120x50 console. */
+void psrp_host_default_data_defaults(psrp_host_default_data_t *out);
+
+/* Builds the <Obj N="_hostDefaultData"> value, whose `data` property is a
+ * hashtable from those integer keys to typed-value wrappers. */
+psrp_result_t psrp_host_build_default_data(const psrp_host_default_data_t *d,
+                                           psrp_value_t *out);
+
 #ifdef __cplusplus
 }
 #endif

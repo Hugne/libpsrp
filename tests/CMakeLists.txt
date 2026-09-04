@@ -32,6 +32,7 @@ psrp_add_unit_test(test_session unit/test_session.c)
 psrp_add_unit_test(test_messages_pool unit/test_messages_pool.c)
 psrp_add_unit_test(test_host unit/test_host.c)
 psrp_add_unit_test(test_crypto unit/test_crypto.c)
+psrp_add_unit_test(test_hostdata unit/test_hostdata.c)
 
 # Live interop test. Labelled so it can be selected or excluded; it skips
 # itself unless PSRP_INTEROP=1, so the default run needs no WinRM.

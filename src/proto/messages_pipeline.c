@@ -8,6 +8,7 @@
 
 #include "psrp/psrp_messages.h"
 #include "psrp/psrp_clixml.h"
+#include "psrp/psrp_host.h"
 
 /* RefIds must be unique within a serialized document. Objects and type-name
  * lists are numbered in separate spaces, as PowerShell does. */
@@ -133,10 +134,12 @@ static const char *apartment_state_name(int32_t v)
 void psrp_host_info_null(psrp_host_info_t *out)
 {
     if (!out) return;
+    memset(out, 0, sizeof *out);
     out->is_host_null = true;
     out->is_host_ui_null = true;
     out->is_host_raw_ui_null = true;
     out->use_runspace_host = true;
+    out->default_data = NULL;   /* no console to describe */
 }
 
 static psrp_object_t *build_host_info(refgen_t *g, const psrp_host_info_t *h)
@@ -153,8 +156,16 @@ static psrp_object_t *build_host_info(refgen_t *g, const psrp_host_info_t *h)
     if (rc == PSRP_OK) rc = add_bool(o, "_isHostUINull", h->is_host_ui_null);
     if (rc == PSRP_OK) rc = add_bool(o, "_isHostRawUINull", h->is_host_raw_ui_null);
     if (rc == PSRP_OK) rc = add_bool(o, "_useRunspaceHost", h->use_runspace_host);
-    /* _hostDefaultData is omitted for a null host, matching the spec's own
-     * null-host example. TODO(PSRP-07) populate it when a real host exists. */
+    /* _hostDefaultData is present only when the caller describes a console;
+     * a null host omits it entirely, matching the spec's null-host example. */
+    if (rc == PSRP_OK && h->default_data) {
+        psrp_value_t data;
+        psrp_value_init(&data);
+        rc = psrp_host_build_default_data(h->default_data, &data);
+        if (rc == PSRP_OK)
+            rc = psrp_object_add_extended(o, "_hostDefaultData", &data);
+        psrp_value_free(&data);
+    }
     if (rc != PSRP_OK) { psrp_object_free(o); return NULL; }
     return o;
 }
