@@ -71,6 +71,15 @@ psrp_result_t psrp_transport_send_priority(psrp_transport_t *t,
 psrp_result_t psrp_transport_receive(psrp_transport_t *t, psrp_buffer_t *out,
                                      uint32_t timeout_ms);
 
+/* Stops the running pipeline with a wxf:Signal (3.1.4.4, 3.1.5.3.9). The
+ * signal is targeted at the command, so it stops that pipeline rather than
+ * the whole pool. */
+psrp_result_t psrp_transport_stop_pipeline(psrp_transport_t *t);
+
+/* Closes the remote shell with a wxf:Delete (3.1.4.2). psrp_transport_free
+ * does this anyway; call it directly when you want to observe the result. */
+psrp_result_t psrp_transport_close_shell(psrp_transport_t *t);
+
 /* True once the remote command has reported it is done. */
 bool psrp_transport_command_done(const psrp_transport_t *t);
 

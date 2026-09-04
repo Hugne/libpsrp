@@ -217,6 +217,12 @@ void WINAPI WSManReceiveShellOutput(
     WSMAN_STREAM_ID_SET *desiredStreamSet, WSMAN_SHELL_ASYNC *async,
     WSMAN_OPERATION_HANDLE *receiveOperation);
 
+/* Passing a NULL command targets the shell rather than a pipeline. */
+void WINAPI WSManSignalShell(
+    WSMAN_SHELL_HANDLE shell, WSMAN_COMMAND_HANDLE command, DWORD flags,
+    PCWSTR code, WSMAN_SHELL_ASYNC *async,
+    WSMAN_OPERATION_HANDLE *signalOperation);
+
 void WINAPI WSManCloseOperation(WSMAN_OPERATION_HANDLE operationHandle,
                                 DWORD flags);
 

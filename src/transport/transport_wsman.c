@@ -514,6 +514,72 @@ psrp_result_t psrp_transport_send_priority(psrp_transport_t *t,
     return send_on_stream(t, L"pr", data, len);
 }
 
+/* 3.1.5.3.9 fixes this string, and it is misspelled: "crtl_c", not "ctrl_c".
+ * Both occurrences in the spec agree, and PowerShell expects it verbatim.
+ * Tidying the typo would silently break pipeline cancellation. */
+static PCWSTR kSignalTerminate = L"powershell/signal/crtl_c";
+
+psrp_result_t psrp_transport_stop_pipeline(psrp_transport_t *t)
+{
+    async_op_t op;
+    WSMAN_SHELL_ASYNC async;
+    WSMAN_OPERATION_HANDLE sig = NULL;
+    psrp_result_t rc = PSRP_OK;
+
+    if (!t) return PSRP_ERR_INVALID_ARG;
+    if (!t->shell || !t->command) return PSRP_ERR_STATE;
+
+    op_init(&op);
+    async.operationContext = &op;
+    async.completionFunction = generic_completion;
+    WSManSignalShell(t->shell, t->command, 0, kSignalTerminate, &async, &sig);
+    if (WaitForSingleObject(op.done, t->timeout_ms) != WAIT_OBJECT_0) {
+        set_error(t, "WSManSignalShell", 0, L"timed out");
+        rc = PSRP_ERR_TRANSPORT;
+    } else if (op.error != 0) {
+        set_error(t, "WSManSignalShell", op.error, op.detail);
+        rc = PSRP_ERR_TRANSPORT;
+    }
+    if (sig) WSManCloseOperation(sig, 0);
+    op_destroy(&op);
+    return rc;
+}
+
+psrp_result_t psrp_transport_close_shell(psrp_transport_t *t)
+{
+    async_op_t op;
+    WSMAN_SHELL_ASYNC async;
+    psrp_result_t rc = PSRP_OK;
+
+    if (!t) return PSRP_ERR_INVALID_ARG;
+    if (!t->shell) return PSRP_ERR_STATE;
+
+    /* Cancel the receive first; otherwise it reports the shell closing under
+     * it as a transport error. */
+    if (t->recv_op) {
+        EnterCriticalSection(&t->recv.lock);
+        t->recv.expect_abort = true;
+        LeaveCriticalSection(&t->recv.lock);
+        WSManCloseOperation(t->recv_op, 0);
+        t->recv_op = NULL;
+    }
+
+    op_init(&op);
+    async.operationContext = &op;
+    async.completionFunction = generic_completion;
+    WSManCloseShell(t->shell, 0, &async);
+    if (WaitForSingleObject(op.done, t->timeout_ms) != WAIT_OBJECT_0) {
+        set_error(t, "WSManCloseShell", 0, L"timed out");
+        rc = PSRP_ERR_TRANSPORT;
+    } else if (op.error != 0) {
+        set_error(t, "WSManCloseShell", op.error, op.detail);
+        rc = PSRP_ERR_TRANSPORT;
+    }
+    op_destroy(&op);
+    t->shell = NULL;   /* closed exactly once */
+    return rc;
+}
+
 psrp_result_t psrp_transport_receive(psrp_transport_t *t, psrp_buffer_t *out,
                                      uint32_t timeout_ms)
 {

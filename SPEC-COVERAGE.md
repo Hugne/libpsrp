@@ -207,7 +207,7 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 3.1.3 | Initialization | done | done | session construction; pool id generated |
 | 3.1.4 | Higher-Layer Triggered Events | wip | wip | create pool + execute pipeline done; the rest pending |
 | 3.1.4.1 | Creating a RunspacePool | done | done | open payload: SESSION_CAPABILITY + INIT_RUNSPACEPOOL |
-| 3.1.4.2 | Closing a RunspacePool | todo | todo | |
+| 3.1.4.2 | Closing a RunspacePool | done | done | explicit close; state tracked |
 | 3.1.4.3 | Executing a Pipeline | done | done | CREATE_PIPELINE payload + pipeline id |
 | 3.1.4.4 | Stopping a Pipeline | done | done | pipeline state tracked; signal handled by the transport |
 | 3.1.4.5 | Getting Command Metadata | todo | todo | |
@@ -232,10 +232,10 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 3.1.5.3.6 | Rules for the wxf:SendResponse Message | done | done | completion handled by the WSMan client |
 | 3.1.5.3.7 | Rules for the wxf:Receive Message | done | done | stdout stream, re-posted until the command is Done |
 | 3.1.5.3.8 | Rules for the wxf:ReceiveResponse Message | done | done | stream data fed to the session |
-| 3.1.5.3.9 | Rules for the wxf:Signal Message | todo | todo | |
-| 3.1.5.3.10 | Rules for the wxf:SignalResponse Message | todo | todo | |
-| 3.1.5.3.11 | Rules for the wxf:Delete Message | todo | todo | |
-| 3.1.5.3.12 | Rules for the wxf:DeleteResponse Message | todo | todo | |
+| 3.1.5.3.9 | Rules for the wxf:Signal Message | done | done | stop pipeline; code is the spec's misspelled powershell/signal/crtl_c |
+| 3.1.5.3.10 | Rules for the wxf:SignalResponse Message | done | done | completion handled by the WSMan client |
+| 3.1.5.3.11 | Rules for the wxf:Delete Message | done | done | explicit shell close, verified live |
+| 3.1.5.3.12 | Rules for the wxf:DeleteResponse Message | done | done | completion handled by the WSMan client |
 | 3.1.5.3.13 | Rules for the wxf:Fault Message | todo | todo | |
 | 3.1.5.3.14 | Rules for the wxf:Connect Message | todo | todo | |
 | 3.1.5.3.15 | Rules for the wxf:ConnectResponse Message | todo | todo | |

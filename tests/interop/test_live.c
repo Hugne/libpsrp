@@ -175,6 +175,14 @@ int main(void)
         printf("output: <none>\n");
     }
 
+    /* 5. Close the pool explicitly (wxf:Delete, 3.1.4.2) so the server tears
+     *    the shell down now rather than waiting for an idle timeout. */
+    if (psrp_transport_close_shell(t) != PSRP_OK) {
+        printf("FAIL: close shell: %s\n", psrp_transport_last_error(t));
+        goto done;
+    }
+    printf("shell closed\n");
+
     if (state == PSRP_INVOCATION_COMPLETED && out_text.len > 1) {
         printf("PASS\n");
         status = 0;
