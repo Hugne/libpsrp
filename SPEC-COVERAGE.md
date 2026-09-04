@@ -109,52 +109,52 @@ This file is the definition of "full spec coverage". Update it in the same commi
 
 | Section | Title | Impl | Tests | Notes |
 |---|---|---|---|---|
-| 2.2.5 | Serialization | todo | todo | |
-| 2.2.5.1 | Serialization of Primitive Type Objects | todo | todo | |
-| 2.2.5.1.1 | String | todo | todo | |
-| 2.2.5.1.2 | Character | todo | todo | |
-| 2.2.5.1.3 | Boolean | todo | todo | |
-| 2.2.5.1.4 | Date/Time | todo | todo | |
-| 2.2.5.1.5 | Duration | todo | todo | |
-| 2.2.5.1.6 | Unsigned Byte | todo | todo | |
-| 2.2.5.1.7 | Signed Byte | todo | todo | |
-| 2.2.5.1.8 | Unsigned Short | todo | todo | |
-| 2.2.5.1.9 | Signed Short | todo | todo | |
-| 2.2.5.1.10 | Unsigned Int | todo | todo | |
-| 2.2.5.1.11 | Signed Int | todo | todo | |
-| 2.2.5.1.12 | Unsigned Long | todo | todo | |
-| 2.2.5.1.13 | Signed Long | todo | todo | |
-| 2.2.5.1.14 | Float | todo | todo | |
-| 2.2.5.1.15 | Double | todo | todo | |
-| 2.2.5.1.16 | Decimal | todo | todo | |
-| 2.2.5.1.17 | Array of Bytes | todo | todo | |
-| 2.2.5.1.18 | GUID | todo | todo | |
-| 2.2.5.1.19 | URI | todo | todo | |
-| 2.2.5.1.20 | Null Value | todo | todo | |
-| 2.2.5.1.21 | Version | todo | todo | |
-| 2.2.5.1.22 | XML Document | todo | todo | |
-| 2.2.5.1.23 | ScriptBlock | todo | todo | |
-| 2.2.5.1.24 | Secure String | todo | todo | |
-| 2.2.5.1.25 | Progress Record | todo | todo | |
-| 2.2.5.1.26 | Information Record | todo | todo | |
-| 2.2.5.2 | Serialization of Complex Objects | todo | todo | |
-| 2.2.5.2.1 | Referencing Earlier Objects | todo | todo | |
-| 2.2.5.2.1.1 | RefId Attribute | todo | todo | |
-| 2.2.5.2.1.2 | <Ref> Element | todo | todo | |
-| 2.2.5.2.2 | <Obj> Element | todo | todo | |
-| 2.2.5.2.3 | Type Names | todo | todo | |
-| 2.2.5.2.4 | ToString | todo | todo | |
-| 2.2.5.2.5 | Contents of Extended Primitive Objects | todo | todo | |
-| 2.2.5.2.6 | Contents of Known Containers | todo | todo | |
-| 2.2.5.2.6.1 | Stack | todo | todo | |
-| 2.2.5.2.6.2 | Queue | todo | todo | |
-| 2.2.5.2.6.3 | List | todo | todo | |
-| 2.2.5.2.6.4 | Dictionaries | todo | todo | |
-| 2.2.5.2.7 | Contents of Enums | todo | todo | |
-| 2.2.5.2.8 | Adapted Properties | todo | todo | |
-| 2.2.5.2.9 | Extended Properties | todo | todo | |
+| 2.2.5 | Serialization | wip | wip | writer complete for all primitives + complex objects; reader next |
+| 2.2.5.1 | Serialization of Primitive Type Objects | wip | wip | serialize done; deserialize pending |
+| 2.2.5.1.1 | String | wip | wip | serialize done; deserialize pending |
+| 2.2.5.1.2 | Character | wip | wip | serialize done; deserialize pending |
+| 2.2.5.1.3 | Boolean | wip | wip | serialize done; deserialize pending |
+| 2.2.5.1.4 | Date/Time | wip | wip | serialize done; deserialize pending |
+| 2.2.5.1.5 | Duration | wip | wip | serialize done; deserialize pending |
+| 2.2.5.1.6 | Unsigned Byte | wip | wip | serialize done; deserialize pending |
+| 2.2.5.1.7 | Signed Byte | wip | wip | serialize done; deserialize pending |
+| 2.2.5.1.8 | Unsigned Short | wip | wip | serialize done; deserialize pending |
+| 2.2.5.1.9 | Signed Short | wip | wip | serialize done; deserialize pending |
+| 2.2.5.1.10 | Unsigned Int | wip | wip | serialize done; deserialize pending |
+| 2.2.5.1.11 | Signed Int | wip | wip | serialize done; deserialize pending |
+| 2.2.5.1.12 | Unsigned Long | wip | wip | serialize done; deserialize pending |
+| 2.2.5.1.13 | Signed Long | wip | wip | serialize done; deserialize pending |
+| 2.2.5.1.14 | Float | wip | wip | serialize done; deserialize pending |
+| 2.2.5.1.15 | Double | wip | wip | serialize done; deserialize pending |
+| 2.2.5.1.16 | Decimal | wip | wip | serialize done; deserialize pending |
+| 2.2.5.1.17 | Array of Bytes | wip | wip | serialize done; deserialize pending |
+| 2.2.5.1.18 | GUID | wip | wip | serialize done; deserialize pending |
+| 2.2.5.1.19 | URI | wip | wip | serialize done; deserialize pending |
+| 2.2.5.1.20 | Null Value | wip | wip | serialize done; deserialize pending |
+| 2.2.5.1.21 | Version | wip | wip | serialize done; deserialize pending |
+| 2.2.5.1.22 | XML Document | wip | wip | serialize done; deserialize pending |
+| 2.2.5.1.23 | ScriptBlock | wip | wip | serialize done; deserialize pending |
+| 2.2.5.1.24 | Secure String | wip | wip | serialize done; deserialize pending |
+| 2.2.5.1.25 | Progress Record | wip | wip | serialize done; deserialize pending |
+| 2.2.5.1.26 | Information Record | wip | wip | serialize done; deserialize pending |
+| 2.2.5.2 | Serialization of Complex Objects | wip | wip | serialize done; deserialize pending |
+| 2.2.5.2.1 | Referencing Earlier Objects | wip | wip | serialize done; deserialize pending |
+| 2.2.5.2.1.1 | RefId Attribute | wip | wip | serialize done; deserialize pending |
+| 2.2.5.2.1.2 | <Ref> Element | wip | wip | serialize done; deserialize pending |
+| 2.2.5.2.2 | <Obj> Element | wip | wip | serialize done; deserialize pending |
+| 2.2.5.2.3 | Type Names | wip | wip | serialize done; deserialize pending |
+| 2.2.5.2.4 | ToString | wip | wip | serialize done; deserialize pending |
+| 2.2.5.2.5 | Contents of Extended Primitive Objects | wip | wip | serialize done; deserialize pending |
+| 2.2.5.2.6 | Contents of Known Containers | wip | wip | serialize done; deserialize pending |
+| 2.2.5.2.6.1 | Stack | wip | wip | serialize done; deserialize pending |
+| 2.2.5.2.6.2 | Queue | wip | wip | serialize done; deserialize pending |
+| 2.2.5.2.6.3 | List | wip | wip | serialize done; deserialize pending |
+| 2.2.5.2.6.4 | Dictionaries | wip | wip | serialize done; deserialize pending |
+| 2.2.5.2.7 | Contents of Enums | wip | wip | serialize done; deserialize pending |
+| 2.2.5.2.8 | Adapted Properties | wip | wip | serialize done; deserialize pending |
+| 2.2.5.2.9 | Extended Properties | wip | wip | serialize done; deserialize pending |
 | 2.2.5.3 | Miscellaneous | todo | todo | |
-| 2.2.5.3.1 | Property Name | todo | todo | |
+| 2.2.5.3.1 | Property Name | wip | wip | N= attribute written and escaped; read pending |
 | 2.2.5.3.2 | Encoding Strings | done | done | matches real PowerShell, incl. underscore-before-x rule and surrogate escapes |
 | 2.2.5.3.3 | Lifetime of a Serializer/Deserializer Pair | todo | todo | |
 | 2.2.5.3.4 | Structure of Complex Objects | todo | todo | |

@@ -38,6 +38,9 @@ add_library(psrp STATIC
   src/proto/defrag.c
   src/proto/message.c
   src/proto/clixml_str.c
+  src/proto/clixml_write.c
+  src/proto/object.c
+  src/proto/object_complex.c
 )
 add_library(psrp::psrp ALIAS psrp)
 
