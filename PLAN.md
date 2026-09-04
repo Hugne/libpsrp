@@ -143,7 +143,7 @@ stays tiny. Five tiers:
    serializer must produce semantically equal output. This is ground truth from
    the actual implementation we must interoperate with — a big win, and we have
    PowerShell right here to generate it.
-4. **Differential tests** — optional, `pip install psrpcore`; cross-check our
+4. **Differential tests** — done, see `tools/differential.py`; cross-check our
    fragment/message bytes against a second independent implementation.
 5. **Interop tests** — labelled `interop`, opt-in via `PSRP_INTEROP=1`. Drive a
    real runspace pool against `localhost` WinRM and assert

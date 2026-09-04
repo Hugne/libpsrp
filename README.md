@@ -51,6 +51,19 @@ reports how often each target actually accepted its input and fails if any
 target never did: a fuzzer that only ever exercises rejection paths looks
 identical to one that found nothing.
 
+There is also a differential test against `psrpcore`, an independent Python
+implementation of the same specification:
+
+```
+pip install psrpcore
+python tools/differential.py            # regenerate the corpus, check both ways
+```
+
+It runs both directions, because they fail differently: psrpcore serializes and
+we parse (catching an over-strict reader), and we serialize and psrpcore parses
+(catching a writer only our own reader would accept). Direction A is baked into
+a committed corpus so `ctest` needs neither Python nor psrpcore.
+
 Leaks are caught separately. AddressSanitizer on Windows has no leak detector,
 so the tests and the fuzzer turn on the MSVC debug CRT's allocation tracking
 instead; a debug MSVC run reports `(leak-checked)` when it is active.
