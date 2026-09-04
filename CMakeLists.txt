@@ -44,6 +44,7 @@ add_library(psrp STATIC
   src/xml/xml_xmllite.c
   src/proto/clixml_read.c
   src/proto/messages.c
+  src/proto/messages_pipeline.c
 )
 add_library(psrp::psrp ALIAS psrp)
 

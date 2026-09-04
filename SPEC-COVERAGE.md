@@ -33,7 +33,7 @@ This file is the definition of "full spec coverage". Update it in the same commi
 |---|---|---|---|---|
 | 2.2.2 | Message Types | wip | wip | all 31 type codes done + verified; per-message Data bodies need CLIXML (2.2.5) |
 | 2.2.2.1 | SESSION_CAPABILITY Message | done | done | build + parse; TimeZone ignored (PSRP does not interpret it) |
-| 2.2.2.2 | INIT_RUNSPACEPOOL Message | todo | todo | |
+| 2.2.2.2 | INIT_RUNSPACEPOOL Message | done | done | build; ApplicationArguments sent as Null |
 | 2.2.2.3 | PUBLIC_KEY Message | todo | todo | |
 | 2.2.2.4 | ENCRYPTED_SESSION_KEY Message | todo | todo | |
 | 2.2.2.5 | PUBLIC_KEY_REQUEST Message | todo | todo | |
@@ -41,7 +41,7 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 2.2.2.7 | SET_MIN_RUNSPACES Message | todo | todo | |
 | 2.2.2.8 | RUNSPACE_AVAILABILITY Message | todo | todo | |
 | 2.2.2.9 | RUNSPACEPOOL_STATE Message | done | done | parse incl. optional ExceptionAsErrorRecord text |
-| 2.2.2.10 | CREATE_PIPELINE Message | todo | todo | |
+| 2.2.2.10 | CREATE_PIPELINE Message | done | done | build, multi-command pipelines with named + positional parameters |
 | 2.2.2.11 | GET_AVAILABLE_RUNSPACES Message | todo | todo | |
 | 2.2.2.12 | USER_EVENT Message | todo | todo | |
 | 2.2.2.13 | APPLICATION_PRIVATE_DATA Message | todo | todo | |
@@ -74,18 +74,18 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 2.2.3.3 | Color | todo | todo | |
 | 2.2.3.4 | RunspacePoolState | done | done | all 10 values + terminal-state helper |
 | 2.2.3.5 | PSInvocationState | done | done | all 7 values + terminal-state helper |
-| 2.2.3.6 | PSThreadOptions | todo | todo | |
-| 2.2.3.7 | ApartmentState | todo | todo | |
-| 2.2.3.8 | RemoteStreamOptions | todo | todo | |
+| 2.2.3.6 | PSThreadOptions | done | done | enum object with type names + ToString |
+| 2.2.3.7 | ApartmentState | done | done | enum object with type names + ToString |
+| 2.2.3.8 | RemoteStreamOptions | done | done | bit flags defined; sent in CREATE_PIPELINE |
 | 2.2.3.9 | ErrorCategory | todo | todo | |
 | 2.2.3.10 | TimeZone | todo | todo | |
 | 2.2.3.10.1 | CurrentSystemTimeZone | todo | todo | |
 | 2.2.3.10.2 | Hashtable from int to DaylightTime Using Default Comparer | todo | todo | |
 | 2.2.3.10.3 | DaylightTime | todo | todo | |
-| 2.2.3.11 | Pipeline | todo | todo | |
-| 2.2.3.12 | Command | todo | todo | |
-| 2.2.3.13 | Command Parameter | todo | todo | |
-| 2.2.3.14 | HostInfo | todo | todo | |
+| 2.2.3.11 | Pipeline | done | done | Cmds/IsNested/History/RedirectShellErrorOutputPipe |
+| 2.2.3.12 | Command | done | done | Cmd/IsScript/UseLocalScope/merge flags/Args |
+| 2.2.3.13 | Command Parameter | done | done | named and positional (Null N) |
+| 2.2.3.14 | HostInfo | wip | wip | null-host form done; populated _hostDefaultData deferred (TODO PSRP-07) |
 | 2.2.3.15 | ErrorRecord | todo | todo | |
 | 2.2.3.15.1 | InvocationInfo-specific Extended Properties | todo | todo | |
 | 2.2.3.16 | InformationalRecord (DebugRecord, WarningRecord or VerboseRecord) | todo | todo | |
@@ -103,7 +103,7 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 2.2.3.28 | BufferCell | todo | todo | |
 | 2.2.3.29 | BufferCellType | todo | todo | |
 | 2.2.3.30 | CommandOrigin | todo | todo | |
-| 2.2.3.31 | PipelineResultTypes | todo | todo | |
+| 2.2.3.31 | PipelineResultTypes | done | done | bit flags defined |
 
 ## Serialization (2.2.5)
 

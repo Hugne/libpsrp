@@ -26,6 +26,7 @@ implementing goes here. Nothing is dropped silently.
 | PSRP-05 | XML backend | 2.2.5 | Portable XML reader to replace XmlLite | XmlLite is the signed-off choice (Microsoft standard, in both toolchains, no vendoring). It is Windows-only; `psrp_xml.h` keeps the seam so a portable parser can be dropped in if we ever leave Windows. Not needed while the transport is Win32 WSMan. | open |
 | PSRP-03 | Transport | 2.1 | Non-Windows transport (raw HTTP/SOAP WSMan) | First transport is Win32 WSMan. Core is sans-IO so this is additive. | open |
 | PSRP-04 | Crypto | 2.2.5.1.24 | SecureString encryption requires session key exchange | Scheduled phase 9; until then SecureString round-trips only as an opaque/rejected value. | open |
+| PSRP-07 | HostInfo | 2.2.3.14 | Populated `_hostDefaultData` dictionary (colors, coordinates, sizes, window title) | Only meaningful when the client supplies a real host implementation. The spec's own example shows a null host omitting it entirely, and that is what we send. Needed for host method calls (phase 8). | open |
 | PSRP-06 | Server role | 3.2 | Server-side protocol details | **Out of scope** by sign-off: client only. Recorded here so the exclusion is explicit rather than an oversight. | wontfix |
 
 ## Closed

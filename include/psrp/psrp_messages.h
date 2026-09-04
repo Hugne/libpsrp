@@ -94,6 +94,108 @@ psrp_result_t psrp_parse_pipeline_state(const void *xml, size_t n,
                                         psrp_pipeline_state_msg_t *out);
 void psrp_pipeline_state_msg_free(psrp_pipeline_state_msg_t *m);
 
+/* ------------------------------------------------- 2.2.3.6 / 2.2.3.7 ----- */
+
+/* PSRP does not interpret either of these; they are passed to the higher
+ * layer on the server. */
+typedef enum psrp_thread_options {
+    PSRP_THREAD_DEFAULT = 0,
+    PSRP_THREAD_USE_NEW_THREAD = 1,
+    PSRP_THREAD_REUSE_THREAD = 2,
+    PSRP_THREAD_USE_CURRENT_THREAD = 3
+} psrp_thread_options_t;
+
+typedef enum psrp_apartment_state {
+    PSRP_APARTMENT_STA = 0,
+    PSRP_APARTMENT_MTA = 1,
+    PSRP_APARTMENT_UNKNOWN = 2
+} psrp_apartment_state_t;
+
+/* 2.2.3.8 RemoteStreamOptions: bit flags in a signed int. */
+#define PSRP_STREAM_OPT_INVOCATION_INFO_TO_ERROR   0x01
+#define PSRP_STREAM_OPT_INVOCATION_INFO_TO_WARNING 0x02
+#define PSRP_STREAM_OPT_INVOCATION_INFO_TO_DEBUG   0x04
+#define PSRP_STREAM_OPT_INVOCATION_INFO_TO_VERBOSE 0x08
+
+/* 2.2.3.31 PipelineResultTypes: bit flags in a signed int. */
+#define PSRP_RESULT_NONE    0x00
+#define PSRP_RESULT_OUTPUT  0x01
+#define PSRP_RESULT_ERROR   0x02
+#define PSRP_RESULT_WARNING 0x04
+#define PSRP_RESULT_VERBOSE 0x08
+#define PSRP_RESULT_DEBUG   0x10
+#define PSRP_RESULT_ALL     0x20
+
+/* -------------------------------------------------- 2.2.3.14 HostInfo ---- */
+
+/* Note the wire property names carry a leading underscore (_isHostNull and
+ * friends) even though the spec's prose omits it; every example in the spec
+ * uses the underscored form. */
+typedef struct psrp_host_info {
+    bool is_host_null;
+    bool is_host_ui_null;
+    bool is_host_raw_ui_null;
+    bool use_runspace_host;
+} psrp_host_info_t;
+
+/* A host that implements nothing. The spec shows exactly this shape, with the
+ * four flags true and no _hostDefaultData, so a client with no console to
+ * offer can say so honestly. See TODO PSRP-07 for the populated form. */
+void psrp_host_info_null(psrp_host_info_t *out);
+
+/* --------------------------------------------- 2.2.2.2 INIT_RUNSPACEPOOL - */
+
+typedef struct psrp_init_runspacepool {
+    int32_t min_runspaces;
+    int32_t max_runspaces;
+    int32_t thread_options;    /* psrp_thread_options_t */
+    int32_t apartment_state;   /* psrp_apartment_state_t */
+    psrp_host_info_t host;
+} psrp_init_runspacepool_t;
+
+/* One runspace, default threading, unknown apartment, null host. */
+void psrp_init_runspacepool_defaults(psrp_init_runspacepool_t *out);
+
+psrp_result_t psrp_build_init_runspacepool(const psrp_init_runspacepool_t *init,
+                                           psrp_buffer_t *out);
+
+/* ---------------------------------- 2.2.3.12/2.2.3.13 Command + params --- */
+
+typedef struct psrp_command psrp_command_t;
+
+/* `cmd` is a command name or, when is_script is true, script text. */
+psrp_command_t *psrp_command_new(const char *cmd, bool is_script);
+void psrp_command_free(psrp_command_t *c);
+
+/* Appends a parameter. `name` may be NULL for a positional argument, which
+ * serializes as <Nil N="N" /> per 2.2.3.13. Takes ownership of *value. */
+psrp_result_t psrp_command_add_parameter(psrp_command_t *c, const char *name,
+                                         psrp_value_t *value);
+/* Convenience for a string-valued parameter. */
+psrp_result_t psrp_command_add_string_parameter(psrp_command_t *c,
+                                                const char *name,
+                                                const char *value);
+
+/* ---------------------------------------------- 2.2.2.10 CREATE_PIPELINE - */
+
+typedef struct psrp_create_pipeline {
+    bool no_input;             /* NoInput */
+    bool add_to_history;       /* AddToHistory */
+    bool is_nested;            /* IsNested */
+    int32_t apartment_state;   /* ApartmentState */
+    int32_t remote_stream_options;  /* RemoteStreamOptions bit flags */
+    psrp_host_info_t host;     /* HostInfo */
+} psrp_create_pipeline_t;
+
+/* No input, not added to history, not nested, unknown apartment, null host. */
+void psrp_create_pipeline_defaults(psrp_create_pipeline_t *out);
+
+/* Serializes the CREATE_PIPELINE payload for `count` commands run as one
+ * pipeline, in order. */
+psrp_result_t psrp_build_create_pipeline(const psrp_create_pipeline_t *opts,
+                                         psrp_command_t *const *commands,
+                                         size_t count, psrp_buffer_t *out);
+
 #ifdef __cplusplus
 }
 #endif
