@@ -1025,6 +1025,47 @@ static psrp_result_t dispatch(psrp_session_t *s, const psrp_message_t *m)
     }
 }
 
+/* 3.1.5.1 rule 5 and 3.1.7. A dead pool processes nothing, and an error while
+ * processing a message is terminal for whatever the message was aimed at.
+ *
+ * The spec says an error closes the RunspacePool. This uses Broken instead:
+ * Closed everywhere else in the spec means an orderly shutdown, and reporting
+ * a failed pool as Closed would make a decode error indistinguishable from a
+ * clean exit for any caller that looks at the state rather than the return
+ * value. Recorded as TODO PSRP-13.
+ */
+static psrp_result_t dispatch_guarded(psrp_session_t *s, const psrp_message_t *m)
+{
+    psrp_result_t rc;
+
+    /* 3.1.5.1 rule 5: a Closed or Broken pool ignores everything aimed at it.
+     * Returning success is deliberate; there is no error here, just nothing
+     * left to do. */
+    if (s->pool_state == PSRP_RUNSPACE_CLOSED ||
+        s->pool_state == PSRP_RUNSPACE_BROKEN)
+        return PSRP_OK;
+
+    rc = dispatch(s, m);
+    if (rc == PSRP_OK) return PSRP_OK;
+
+    /* 3.1.7. A pipeline-targeted message takes only its pipeline down; a
+     * pool-targeted one takes the pool. */
+    if (!psrp_guid_is_empty(&m->pid)) {
+        pipe_node_t *p = pipe_find(s, &m->pid);
+        if (p) {
+            psrp_event_t e;
+            pipe_remove(s, &m->pid);
+            event_init(&e, PSRP_EVENT_PIPELINE_STATE, PSRP_MSG_PIPELINE_STATE,
+                       &m->pid);
+            e.state = PSRP_INVOCATION_FAILED;
+            (void)event_push(s, &e);
+        }
+    } else {
+        (void)psrp_session_notify_fault(s, psrp_strerror(rc));
+    }
+    return rc;
+}
+
 psrp_result_t psrp_session_receive(psrp_session_t *s, const void *data,
                                    size_t len)
 {
@@ -1045,7 +1086,7 @@ psrp_result_t psrp_session_receive(psrp_session_t *s, const void *data,
         if (rc != PSRP_OK) { psrp_buffer_free(&msg); return rc; }
 
         rc = psrp_message_decode(msg.data, msg.len, &m);
-        if (rc == PSRP_OK) rc = dispatch(s, &m);
+        if (rc == PSRP_OK) rc = dispatch_guarded(s, &m);
         psrp_buffer_free(&msg);
         if (rc != PSRP_OK) return rc;
     }

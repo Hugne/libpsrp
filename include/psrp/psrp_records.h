@@ -9,6 +9,7 @@
 #define PSRP_RECORDS_H
 
 #include "psrp/psrp_object.h"
+#include "psrp/psrp_host.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -38,6 +39,50 @@ typedef struct psrp_error_record {
 psrp_result_t psrp_parse_error_record(const void *xml, size_t n,
                                       psrp_error_record_t *out);
 void psrp_error_record_free(psrp_error_record_t *r);
+
+/* ------------------------------------------------------- 2.2.3.15.1 ----- */
+/*
+ * InvocationInfo describes the higher-layer command that produced a record.
+ * Error records and informational records may both carry it, and every field
+ * is optional: PowerShell only fills it in when the record was asked to
+ * serialize it.
+ *
+ * The spec is explicit that PSRP implementations MUST NOT interpret this data,
+ * so it is surfaced as it arrives and never acted on. The bound parameters and
+ * unbound arguments hold arbitrary objects, so they stay as values rather than
+ * being flattened into strings that would lose their types.
+ */
+typedef struct psrp_invocation_info {
+    char *invocation_name;      /* InvocationInfo_InvocationName */
+    char *line;                 /* InvocationInfo_Line */
+    char *position_message;     /* InvocationInfo_PositionMessage */
+    char *script_name;          /* InvocationInfo_ScriptName */
+
+    int32_t command_origin;     /* psrp_command_origin_t, -1 if absent */
+    int32_t offset_in_line;     /* -1 if absent */
+    int32_t script_line_number; /* -1 if absent */
+    int32_t pipeline_length;    /* -1 if absent */
+    int32_t pipeline_position;  /* -1 if absent */
+    int64_t history_id;         /* -1 if absent */
+
+    bool expecting_input;
+    bool has_expecting_input;
+
+    /* Owned. Null values when the property was absent. */
+    psrp_value_t bound_parameters;   /* dictionary of name -> value */
+    psrp_value_t unbound_arguments;  /* list of values */
+    psrp_value_t pipeline_iteration_info;  /* list of Signed Int */
+} psrp_invocation_info_t;
+
+/* Reads the InvocationInfo properties out of a record's XML. Every field is
+ * optional, so a record carrying none of them parses successfully with
+ * everything empty; only malformed XML fails. */
+psrp_result_t psrp_parse_invocation_info(const void *xml, size_t n,
+                                         psrp_invocation_info_t *out);
+void psrp_invocation_info_free(psrp_invocation_info_t *i);
+
+/* True when any InvocationInfo property was present. */
+bool psrp_invocation_info_present(const psrp_invocation_info_t *i);
 
 /* --------------------------------- 2.2.3.16 Debug/Verbose/Warning ------- */
 

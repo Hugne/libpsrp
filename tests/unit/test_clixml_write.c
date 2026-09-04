@@ -495,6 +495,56 @@ PSRP_TEST(object_find_prefers_extended)
     psrp_object_free(o);
 }
 
+/* A small substring check; the write tests otherwise compare whole documents. */
+static bool memmem_ok(const psrp_buffer_t *b, const char *needle)
+{
+    size_t n = strlen(needle), i;
+    if (b->len < n) return false;
+    for (i = 0; i + n <= b->len; i++)
+        if (memcmp(b->data + i, needle, n) == 0) return true;
+    return false;
+}
+PSRP_TEST(ref_ids_restart_for_every_message)
+{
+    /* 2.2.5.3.3: a serializer is created fresh for each message type sent, so
+     * object and type identifiers are only unique within one message. Carrying
+     * a counter across messages would make the second one's RefIds point at
+     * objects the far side's deserializer never saw. */
+    psrp_object_t *o;
+    psrp_value_t v, inner;
+    psrp_object_t *child;
+    psrp_buffer_t first, second;
+
+    o = psrp_object_new();
+    ASSERT_NOT_NULL(o);
+    psrp_object_set_ref_id(o, 0);
+    child = psrp_object_new();
+    ASSERT_NOT_NULL(child);
+    psrp_object_set_ref_id(child, 1);
+    psrp_object_set_container(child, PSRP_CONTAINER_LIST);
+    psrp_value_init(&inner);
+    ASSERT_OK(psrp_value_set_object(&inner, child));
+    ASSERT_OK(psrp_object_add_extended(o, "child", &inner));
+    psrp_value_free(&inner);
+
+    psrp_value_init(&v);
+    ASSERT_OK(psrp_value_set_object(&v, o));
+
+    psrp_buffer_init(&first);
+    psrp_buffer_init(&second);
+    ASSERT_OK(psrp_clixml_serialize(&v, &first));
+    ASSERT_OK(psrp_clixml_serialize(&v, &second));
+
+    /* The same value serialized twice must produce identical bytes. */
+    ASSERT_EQ_MEM(first.data, first.len, second.data, second.len);
+    ASSERT_TRUE(memmem_ok(&first, "RefId=\"0\""));
+    ASSERT_TRUE(memmem_ok(&first, "RefId=\"1\""));
+
+    psrp_buffer_free(&first);
+    psrp_buffer_free(&second);
+    psrp_value_free(&v);
+}
+
 static const psrp_test_case_t cases[] = {
     PSRP_TEST_CASE(write_null_is_self_closing),
     PSRP_TEST_CASE(write_bool),
@@ -524,6 +574,7 @@ static const psrp_test_case_t cases[] = {
     PSRP_TEST_CASE(value_set_text_rejects_non_text_kind),
     PSRP_TEST_CASE(kind_element_lookup_roundtrips),
     PSRP_TEST_CASE(object_find_prefers_extended),
+    PSRP_TEST_CASE(ref_ids_restart_for_every_message),
 };
 
 PSRP_TEST_MAIN(cases)

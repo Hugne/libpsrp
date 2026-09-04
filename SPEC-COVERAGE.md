@@ -31,7 +31,7 @@ This file is the definition of "full spec coverage". Update it in the same commi
 
 | Section | Title | Impl | Tests | Notes |
 |---|---|---|---|---|
-| 2.2.2 | Message Types | wip | wip | all 31 type codes done + verified; per-message Data bodies need CLIXML (2.2.5) |
+| 2.2.2 | Message Types | done | done | all 31 type codes and their Data bodies |
 | 2.2.2.1 | SESSION_CAPABILITY Message | done | done | build + parse; TimeZone ignored (PSRP does not interpret it) |
 | 2.2.2.2 | INIT_RUNSPACEPOOL Message | done | done | build; ApplicationArguments sent as Null |
 | 2.2.2.3 | PUBLIC_KEY Message | done | done | build; 276-byte CryptoAPI PUBLICKEYBLOB, little-endian |
@@ -68,7 +68,7 @@ This file is the definition of "full spec coverage". Update it in the same commi
 
 | Section | Title | Impl | Tests | Notes |
 |---|---|---|---|---|
-| 2.2.3 | Other Object Types | todo | todo | |
+| 2.2.3 | Other Object Types | done | done | every subsection covered; see the rows below |
 | 2.2.3.1 | Coordinates | done | done | T/V wrapper, build + read |
 | 2.2.3.2 | Size | done | done | T/V wrapper, build + read |
 | 2.2.3.3 | Color | done | done | T/V wrapper; 0 accepted as Black though the spec table omits it |
@@ -87,7 +87,7 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 2.2.3.13 | Command Parameter | done | done | named and positional (Null N) |
 | 2.2.3.14 | HostInfo | done | done | null-host and populated _hostDefaultData with all ten required keys |
 | 2.2.3.15 | ErrorRecord | done | done | message, error id, category fields |
-| 2.2.3.15.1 | InvocationInfo-specific Extended Properties | todo | todo | |
+| 2.2.3.15.1 | InvocationInfo-specific Extended Properties | done | done | all 13 properties; surfaced, never interpreted |
 | 2.2.3.16 | InformationalRecord (DebugRecord, WarningRecord or VerboseRecord) | done | done | message + invocation-info flag |
 | 2.2.3.17 | Host Method Identifier | done | done | all 56 methods, with the returns-a-value rule |
 | 2.2.3.18 | Primitive Dictionary | done | done | builder enforces the string-key and primitive-value restriction |
@@ -153,16 +153,16 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 2.2.5.2.7 | Contents of Enums | done | done | serialize + deserialize, round-trip tested |
 | 2.2.5.2.8 | Adapted Properties | done | done | serialize + deserialize, round-trip tested |
 | 2.2.5.2.9 | Extended Properties | done | done | serialize + deserialize, round-trip tested |
-| 2.2.5.3 | Miscellaneous | todo | todo | |
-| 2.2.5.3.1 | Property Name | wip | wip | N= attribute written and escaped; read pending |
+| 2.2.5.3 | Miscellaneous | done | done | property names, string encoding, serializer lifetime, object structure |
+| 2.2.5.3.1 | Property Name | done | done | N= written, escaped and read back by name |
 | 2.2.5.3.2 | Encoding Strings | done | done | matches real PowerShell, incl. underscore-before-x rule and surrogate escapes |
-| 2.2.5.3.3 | Lifetime of a Serializer/Deserializer Pair | todo | todo | |
-| 2.2.5.3.4 | Structure of Complex Objects | todo | todo | |
-| 2.2.5.3.4.1 | Adapted Properties | todo | todo | |
-| 2.2.5.3.4.2 | Extended Properties | todo | todo | |
-| 2.2.5.3.4.3 | Property Sets | todo | todo | |
-| 2.2.5.3.4.4 | ToString Value | todo | todo | |
-| 2.2.5.3.4.5 | Type Names | todo | todo | |
+| 2.2.5.3.3 | Lifetime of a Serializer/Deserializer Pair | done | done | RefIds restart per message; pinned by a test |
+| 2.2.5.3.4 | Structure of Complex Objects | done | done | the object model; see the rows below |
+| 2.2.5.3.4.1 | Adapted Properties | done | done | <Props>, psrp_object_add_adapted |
+| 2.2.5.3.4.2 | Extended Properties | done | done | <MS>, psrp_object_add_extended |
+| 2.2.5.3.4.3 | Property Sets | done | done | definition only; the spec gives them no wire element |
+| 2.2.5.3.4.4 | ToString Value | done | done | carried through both ways without interpretation |
+| 2.2.5.3.4.5 | Type Names | done | done | <TN> and <TNRef>, passed through untouched |
 
 ## Host Method Calls (2.2.6)
 
@@ -183,13 +183,13 @@ This file is the definition of "full spec coverage". Update it in the same commi
 
 | Section | Title | Impl | Tests | Notes |
 |---|---|---|---|---|
-| 3.1 | Client Details | wip | wip | session state machine (sans-IO) done; host calls, key exchange, disconnect/reconnect pending |
-| 3.1.1 | Abstract Data Model | wip | wip | pool + pipeline data modelled; session key and CI tables pending |
+| 3.1 | Client Details | done | done | sans-IO state machine, host calls, key exchange, disconnect/reconnect |
+| 3.1.1 | Abstract Data Model | done | done | pool, pipeline, CI and session key state all modelled |
 | 3.1.1.1 | Global Data | done | done | pool id, CI table and pipeline table live in the session |
 | 3.1.1.1.1 | WSMV ShellID to RunspacePool Table | done | done | one session per shell; the transport holds the shell handle |
 | 3.1.1.1.2 | WSMV CommandId to Pipeline Table | done | done | pipeline table keyed by pipeline GUID |
 | 3.1.1.1.3 | Public Key Pair | done | done | 2048-bit RSA generated per crypto context |
-| 3.1.1.2 | RunspacePool Data | wip | wip | id/state/defrag done; session key + information tables pending |
+| 3.1.1.2 | RunspacePool Data | done | done | id, state, defrag, session key and CI table |
 | 3.1.1.2.1 | GUID | done | done | pool id, random v4 from the platform CSPRNG |
 | 3.1.1.2.2 | RunspacePool State | done | done | tracked and exposed |
 | 3.1.1.2.3 | Defragmentation Data | done | done | per-session defragmenter |
@@ -198,14 +198,14 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 3.1.1.2.6 | Pipeline Table | done | done | entered on create, removed on Completed/Failed/Stopped |
 | 3.1.1.2.7 | Session Key | done | done | held by the crypto context once exchanged |
 | 3.1.1.2.8 | SessionKeyTransferTimeoutms | done | done | defaults to 60000; settable, 0 disables |
-| 3.1.1.3 | Pipeline Data | wip | wip | id/state/defrag done; WSMV command handle is the transport's |
+| 3.1.1.3 | Pipeline Data | done | done | id and state in the pipeline table; the command handle is the transport's |
 | 3.1.1.3.1 | GUID | done | done | pipeline id allocated per pipeline |
 | 3.1.1.3.2 | Pipeline State | done | done | surfaced as an event |
 | 3.1.1.3.3 | Defragmentation Data | done | done | shared session defragmenter |
 | 3.1.1.3.4 | WSMV Command | done | done | command handle per pipeline, keyed by the pipeline GUID |
 | 3.1.2 | Timers | done | done | session key transfer timer, advanced by the caller |
 | 3.1.3 | Initialization | done | done | session construction; pool id generated |
-| 3.1.4 | Higher-Layer Triggered Events | wip | wip | create pool + execute pipeline done; the rest pending |
+| 3.1.4 | Higher-Layer Triggered Events | done | done | every subsection; see the rows below |
 | 3.1.4.1 | Creating a RunspacePool | done | done | open payload: SESSION_CAPABILITY + INIT_RUNSPACEPOOL |
 | 3.1.4.2 | Closing a RunspacePool | done | done | explicit close; state tracked |
 | 3.1.4.3 | Executing a Pipeline | done | done | CREATE_PIPELINE payload + pipeline id |
@@ -219,7 +219,7 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 3.1.4.10.2 | Connecting to a RunspacePool from a Previous Client Session | done | done | reconnect; live-verified |
 | 3.1.4.10.3 | Connecting to a RunspacePool from a New Client Session | done | done | connect payload and wxf:Connect; discovery is TODO PSRP-12 |
 | 3.1.5 | Message Processing Events and Sequencing Rules | done | done | send/receive rules, WSMan binding, and sequencing verified live |
-| 3.1.5.1 | General Rules | todo | todo | |
+| 3.1.5.1 | General Rules | done | done | a Closed or Broken pool ignores everything aimed at it |
 | 3.1.5.1.1 | Rules for Sending Data | done | done | message framing + fragmentation on send |
 | 3.1.5.1.2 | Rules for Receiving Data | done | done | defragment, decode, dispatch to events |
 | 3.1.5.2 | Sequencing Rules | done | done | capability first, then init; pool must be Opened before a pipeline |
@@ -278,7 +278,7 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 3.1.5.4.30 | RUNSPACEPOOL_INIT_DATA Message | done | done | surfaced with the server's actual bounds |
 | 3.1.5.4.31 | RESET_RUNSPACE_STATE Message | done | done | requires Opened; allocates a call identifier |
 | 3.1.6 | Timer Events | done | done | expiry breaks the pool and raises an event |
-| 3.1.7 | Other Local Events | todo | todo | |
+| 3.1.7 | Other Local Events | done | done | an error breaks the pool, or fails just its pipeline |
 
 ## Server Protocol Details (3.2)
 

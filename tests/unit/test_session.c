@@ -1482,6 +1482,106 @@ PSRP_TEST(pool_init_data_reports_the_servers_bounds)
     psrp_session_free(s);
 }
 
+/* ------------------- general processing rules (3.1.5.1, 3.1.7) --------- */
+
+PSRP_TEST(a_broken_pool_processes_nothing)
+{
+    /* 3.1.5.1 rule 5. Not an error, just nothing left to do, so receive still
+     * reports success. */
+    psrp_session_t *s = psrp_session_new();
+    psrp_event_t e;
+
+    ASSERT_NOT_NULL(s);
+    open_pool(s);
+    ASSERT_OK(psrp_session_notify_fault(s, "gone"));
+    expect_event(s, PSRP_EVENT_POOL_STATE, &e);
+    psrp_event_free(&e);
+
+    server_send(s, PSRP_MSG_PIPELINE_OUTPUT, NULL, "<S>ignored</S>", 0);
+    server_send(s, PSRP_MSG_APPLICATION_PRIVATE_DATA, NULL,
+                "<Obj RefId=\"0\"><MS></MS></Obj>", 0);
+    ASSERT_ERR(psrp_session_next_event(s, &e), PSRP_ERR_NOT_FOUND);
+    ASSERT_EQ_I(psrp_session_pool_state(s), PSRP_RUNSPACE_BROKEN);
+    psrp_session_free(s);
+}
+
+PSRP_TEST(a_bad_pool_message_breaks_the_pool)
+{
+    /* 3.1.7: an error processing a RunspacePool message takes the pool down.
+     * A SESSION_CAPABILITY whose body is not an object cannot be parsed. */
+    psrp_session_t *s = psrp_session_new();
+    psrp_message_t m;
+    psrp_buffer_t body, wire;
+    psrp_event_t e;
+
+    ASSERT_NOT_NULL(s);
+    open_pool(s);
+
+    memset(&m, 0, sizeof m);
+    m.destination = PSRP_DEST_CLIENT;
+    m.type = PSRP_MSG_RUNSPACEPOOL_STATE;
+    m.rpid = *psrp_session_pool_id(s);
+    m.pid = psrp_guid_empty;
+    m.data = (const uint8_t *)"not xml at all";
+    m.data_len = 14;
+
+    psrp_buffer_init(&body);
+    psrp_buffer_init(&wire);
+    ASSERT_OK(psrp_message_encode(&body, &m));
+    ASSERT_OK(psrp_fragment_split(&wire, 8100, body.data, body.len, 0));
+    ASSERT_TRUE(psrp_session_receive(s, wire.data, wire.len) != PSRP_OK);
+
+    expect_event(s, PSRP_EVENT_POOL_STATE, &e);
+    ASSERT_EQ_I(e.state, PSRP_RUNSPACE_BROKEN);
+    psrp_event_free(&e);
+    ASSERT_EQ_I(psrp_session_pool_state(s), PSRP_RUNSPACE_BROKEN);
+
+    psrp_buffer_free(&body);
+    psrp_buffer_free(&wire);
+    psrp_session_free(s);
+}
+
+PSRP_TEST(a_bad_pipeline_message_stops_only_that_pipeline)
+{
+    /* 3.1.7 again: a pipeline message failing must not take the pool with it,
+     * or one bad record would kill a pool running several pipelines. */
+    psrp_session_t *s = psrp_session_new();
+    psrp_guid_t pid;
+    psrp_message_t m;
+    psrp_buffer_t body, wire;
+    psrp_event_t e;
+    int32_t st = -1;
+
+    ASSERT_NOT_NULL(s);
+    start_pipeline(s, &pid);
+
+    memset(&m, 0, sizeof m);
+    m.destination = PSRP_DEST_CLIENT;
+    m.type = PSRP_MSG_ERROR_RECORD;
+    m.rpid = *psrp_session_pool_id(s);
+    m.pid = pid;
+    m.data = (const uint8_t *)"still not xml";
+    m.data_len = 13;
+
+    psrp_buffer_init(&body);
+    psrp_buffer_init(&wire);
+    ASSERT_OK(psrp_message_encode(&body, &m));
+    ASSERT_OK(psrp_fragment_split(&wire, 8200, body.data, body.len, 0));
+    ASSERT_TRUE(psrp_session_receive(s, wire.data, wire.len) != PSRP_OK);
+
+    expect_event(s, PSRP_EVENT_PIPELINE_STATE, &e);
+    ASSERT_EQ_I(e.state, PSRP_INVOCATION_FAILED);
+    ASSERT_TRUE(psrp_guid_equal(&e.pipeline_id, &pid));
+    psrp_event_free(&e);
+
+    ASSERT_ERR(psrp_session_pipeline_state(s, &pid, &st), PSRP_ERR_NOT_FOUND);
+    ASSERT_EQ_I(psrp_session_pool_state(s), PSRP_RUNSPACE_OPENED);
+
+    psrp_buffer_free(&body);
+    psrp_buffer_free(&wire);
+    psrp_session_free(s);
+}
+
 static const psrp_test_case_t cases[] = {
     PSRP_TEST_CASE(session_starts_before_open_with_a_pool_id),
     PSRP_TEST_CASE(session_pool_ids_are_unique),
@@ -1530,6 +1630,9 @@ static const psrp_test_case_t cases[] = {
     PSRP_TEST_CASE(connect_payload_carries_capability_and_connect),
     PSRP_TEST_CASE(adopting_a_pool_is_only_valid_before_opening),
     PSRP_TEST_CASE(pool_init_data_reports_the_servers_bounds),
+    PSRP_TEST_CASE(a_broken_pool_processes_nothing),
+    PSRP_TEST_CASE(a_bad_pool_message_breaks_the_pool),
+    PSRP_TEST_CASE(a_bad_pipeline_message_stops_only_that_pipeline),
 };
 
 PSRP_TEST_MAIN(cases)
