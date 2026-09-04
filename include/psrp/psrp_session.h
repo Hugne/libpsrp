@@ -47,6 +47,7 @@ typedef enum psrp_event_kind {
     PSRP_EVENT_PROGRESS_RECORD,
     PSRP_EVENT_INFORMATION_RECORD,
     PSRP_EVENT_HOST_CALL,            /* server wants the client's host */
+    PSRP_EVENT_USER_EVENT,           /* `text` holds the source identifier */
     PSRP_EVENT_UNKNOWN_MESSAGE       /* surfaced, not silently dropped */
 } psrp_event_kind_t;
 

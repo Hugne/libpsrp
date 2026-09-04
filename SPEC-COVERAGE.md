@@ -43,9 +43,9 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 2.2.2.9 | RUNSPACEPOOL_STATE Message | done | done | parse incl. optional ExceptionAsErrorRecord text |
 | 2.2.2.10 | CREATE_PIPELINE Message | done | done | build, multi-command pipelines with named + positional parameters |
 | 2.2.2.11 | GET_AVAILABLE_RUNSPACES Message | done | done | build |
-| 2.2.2.12 | USER_EVENT Message | todo | todo | |
+| 2.2.2.12 | USER_EVENT Message | done | done | parse; surfaced as its own session event |
 | 2.2.2.13 | APPLICATION_PRIVATE_DATA Message | done | done | surfaced as an opaque object; PSRP does not interpret it |
-| 2.2.2.14 | GET_COMMAND_METADATA Message | todo | todo | |
+| 2.2.2.14 | GET_COMMAND_METADATA Message | done | done | build; Null Name means "*" per spec |
 | 2.2.2.15 | RUNSPACEPOOL_HOST_CALL Message | done | done | parse to ci/mi/mp |
 | 2.2.2.16 | RUNSPACEPOOL_HOST_RESPONSE Message | done | done | build with mr or me |
 | 2.2.2.17 | PIPELINE_INPUT Message | done | done | serialize any value |
@@ -91,11 +91,11 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 2.2.3.16 | InformationalRecord (DebugRecord, WarningRecord or VerboseRecord) | done | done | message + invocation-info flag |
 | 2.2.3.17 | Host Method Identifier | done | done | all 56 methods, with the returns-a-value rule |
 | 2.2.3.18 | Primitive Dictionary | todo | todo | |
-| 2.2.3.19 | CommandType | todo | todo | |
-| 2.2.3.20 | Wildcard | todo | todo | |
-| 2.2.3.21 | CommandMetadataCount | todo | todo | |
-| 2.2.3.22 | CommandMetadata | todo | todo | |
-| 2.2.3.23 | ParameterMetadata | todo | todo | |
+| 2.2.3.19 | CommandType | done | done | bit flags; well-known CommandTypes values named |
+| 2.2.3.20 | Wildcard | done | done | a String; backtick escapes are the caller's to write |
+| 2.2.3.21 | CommandMetadataCount | done | done | parse Count |
+| 2.2.3.22 | CommandMetadata | done | done | parse name, namespace, help uri, type, parameter names |
+| 2.2.3.23 | ParameterMetadata | wip | wip | parameter names surfaced; per-parameter detail deferred (TODO PSRP-10) |
 | 2.2.3.24 | ArgumentList | todo | todo | |
 | 2.2.3.25 | PSCredential | todo | todo | |
 | 2.2.3.26 | KeyInfo | todo | todo | |
@@ -210,7 +210,7 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 3.1.4.2 | Closing a RunspacePool | done | done | explicit close; state tracked |
 | 3.1.4.3 | Executing a Pipeline | done | done | CREATE_PIPELINE payload + pipeline id |
 | 3.1.4.4 | Stopping a Pipeline | done | done | pipeline state tracked; signal handled by the transport |
-| 3.1.4.5 | Getting Command Metadata | todo | todo | |
+| 3.1.4.5 | Getting Command Metadata | done | done | request builder + result stream parsers |
 | 3.1.4.6 | Setting the Minimum or Maximum Runspaces in a RunspacePool | done | done | builders + availability response |
 | 3.1.4.7 | Getting the Number of Available Runspaces in a RunspacePool | done | done | builder + availability response |
 | 3.1.4.8 | Initiating a Session Key Exchange | done | done | public key export + encrypted session key import |

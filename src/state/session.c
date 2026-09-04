@@ -9,6 +9,7 @@
 #include "psrp/psrp_fragment.h"
 #include "psrp/psrp_clixml.h"
 #include "psrp/psrp_host.h"
+#include "psrp/psrp_metadata.h"
 
 typedef struct event_node {
     struct event_node *next;
@@ -411,6 +412,18 @@ static psrp_result_t dispatch(psrp_session_t *s, const psrp_message_t *m)
         e.text = ir.message_data;
         ir.message_data = NULL;
         psrp_information_record_free(&ir);
+        return event_push(s, &e);
+    }
+
+    case PSRP_MSG_USER_EVENT: {
+        psrp_user_event_t ue;
+        rc = psrp_parse_user_event(xml, xml_len, &ue);
+        if (rc != PSRP_OK) return rc;
+        event_init(&e, PSRP_EVENT_USER_EVENT, m->type, &m->pid);
+        e.state = ue.event_id;
+        e.text = ue.source_identifier;
+        ue.source_identifier = NULL;
+        psrp_user_event_free(&ue);
         return event_push(s, &e);
     }
 
