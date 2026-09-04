@@ -37,14 +37,14 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 2.2.2.3 | PUBLIC_KEY Message | todo | todo | |
 | 2.2.2.4 | ENCRYPTED_SESSION_KEY Message | todo | todo | |
 | 2.2.2.5 | PUBLIC_KEY_REQUEST Message | todo | todo | |
-| 2.2.2.6 | SET_MAX_RUNSPACES Message | todo | todo | |
-| 2.2.2.7 | SET_MIN_RUNSPACES Message | todo | todo | |
-| 2.2.2.8 | RUNSPACE_AVAILABILITY Message | todo | todo | |
+| 2.2.2.6 | SET_MAX_RUNSPACES Message | done | done | build; ci is a Signed Long |
+| 2.2.2.7 | SET_MIN_RUNSPACES Message | done | done | build; ci is a Signed Long |
+| 2.2.2.8 | RUNSPACE_AVAILABILITY Message | done | done | parse; response is Boolean or Signed Long depending on the request |
 | 2.2.2.9 | RUNSPACEPOOL_STATE Message | done | done | parse incl. optional ExceptionAsErrorRecord text |
 | 2.2.2.10 | CREATE_PIPELINE Message | done | done | build, multi-command pipelines with named + positional parameters |
-| 2.2.2.11 | GET_AVAILABLE_RUNSPACES Message | todo | todo | |
+| 2.2.2.11 | GET_AVAILABLE_RUNSPACES Message | done | done | build |
 | 2.2.2.12 | USER_EVENT Message | todo | todo | |
-| 2.2.2.13 | APPLICATION_PRIVATE_DATA Message | todo | todo | |
+| 2.2.2.13 | APPLICATION_PRIVATE_DATA Message | done | done | surfaced as an opaque object; PSRP does not interpret it |
 | 2.2.2.14 | GET_COMMAND_METADATA Message | todo | todo | |
 | 2.2.2.15 | RUNSPACEPOOL_HOST_CALL Message | todo | todo | |
 | 2.2.2.16 | RUNSPACEPOOL_HOST_RESPONSE Message | todo | todo | |
@@ -60,9 +60,9 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 2.2.2.26 | INFORMATION_RECORD Message | done | done | parse; properties arrive as adapted <Props> |
 | 2.2.2.27 | PIPELINE_HOST_CALL Message | todo | todo | |
 | 2.2.2.28 | PIPELINE_HOST_RESPONSE Message | todo | todo | |
-| 2.2.2.29 | CONNECT_RUNSPACEPOOL Message | todo | todo | |
-| 2.2.2.30 | RUNSPACEPOOL_INIT_DATA Message | todo | todo | |
-| 2.2.2.31 | RESET_RUNSPACE_STATE Message | todo | todo | |
+| 2.2.2.29 | CONNECT_RUNSPACEPOOL Message | done | done | build; both bounds optional, empty form supported |
+| 2.2.2.30 | RUNSPACEPOOL_INIT_DATA Message | done | done | parse; absent bounds reported as -1 |
+| 2.2.2.31 | RESET_RUNSPACE_STATE Message | done | done | build |
 
 ## Other Object Types (2.2.3)
 
@@ -211,8 +211,8 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 3.1.4.3 | Executing a Pipeline | done | done | CREATE_PIPELINE payload + pipeline id |
 | 3.1.4.4 | Stopping a Pipeline | todo | todo | |
 | 3.1.4.5 | Getting Command Metadata | todo | todo | |
-| 3.1.4.6 | Setting the Minimum or Maximum Runspaces in a RunspacePool | todo | todo | |
-| 3.1.4.7 | Getting the Number of Available Runspaces in a RunspacePool | todo | todo | |
+| 3.1.4.6 | Setting the Minimum or Maximum Runspaces in a RunspacePool | done | done | builders + availability response |
+| 3.1.4.7 | Getting the Number of Available Runspaces in a RunspacePool | done | done | builder + availability response |
 | 3.1.4.8 | Initiating a Session Key Exchange | todo | todo | |
 | 3.1.4.9 | Disconnecting from a RunspacePool | todo | todo | |
 | 3.1.4.10 | Connecting to a RunspacePool | todo | todo | |

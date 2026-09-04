@@ -196,6 +196,52 @@ psrp_result_t psrp_build_create_pipeline(const psrp_create_pipeline_t *opts,
                                          psrp_command_t *const *commands,
                                          size_t count, psrp_buffer_t *out);
 
+/* ------------------------------- RunspacePool control messages ---------- */
+/*
+ * The `ci` (call id) property correlates a request with the
+ * RUNSPACE_AVAILABILITY that answers it. The caller chooses the values; the
+ * protocol only requires that a response can be matched to its request.
+ */
+
+/* 2.2.2.6 SET_MAX_RUNSPACES / 2.2.2.7 SET_MIN_RUNSPACES */
+psrp_result_t psrp_build_set_max_runspaces(int64_t ci, int32_t max_runspaces,
+                                           psrp_buffer_t *out);
+psrp_result_t psrp_build_set_min_runspaces(int64_t ci, int32_t min_runspaces,
+                                           psrp_buffer_t *out);
+/* 2.2.2.11 GET_AVAILABLE_RUNSPACES */
+psrp_result_t psrp_build_get_available_runspaces(int64_t ci, psrp_buffer_t *out);
+/* 2.2.2.31 RESET_RUNSPACE_STATE (protocol version 2.3 and later) */
+psrp_result_t psrp_build_reset_runspace_state(int64_t ci, psrp_buffer_t *out);
+/* 2.2.2.29 CONNECT_RUNSPACEPOOL (protocol version 2.2 and later).
+ * Both bounds are optional; pass a negative value to omit one, or omit both
+ * for the spec's "empty" form meaning a single runspace. */
+psrp_result_t psrp_build_connect_runspacepool(int32_t min_runspaces,
+                                              int32_t max_runspaces,
+                                              psrp_buffer_t *out);
+
+/* 2.2.2.8 RUNSPACE_AVAILABILITY. The response is a Boolean when answering a
+ * set-min/max request and a Signed Long when answering get-available, so both
+ * shapes are reported and `is_count` says which arrived. */
+typedef struct psrp_runspace_availability {
+    int64_t ci;
+    bool is_count;        /* true: `count` is valid; false: `accepted` is */
+    bool accepted;
+    int64_t count;
+} psrp_runspace_availability_t;
+
+psrp_result_t psrp_parse_runspace_availability(
+    const void *xml, size_t n, psrp_runspace_availability_t *out);
+
+/* 2.2.2.30 RUNSPACEPOOL_INIT_DATA. Both properties are optional; absent
+ * bounds are reported as -1 rather than 0, which is a legal runspace count. */
+typedef struct psrp_runspacepool_init_data {
+    int32_t min_runspaces;
+    int32_t max_runspaces;
+} psrp_runspacepool_init_data_t;
+
+psrp_result_t psrp_parse_runspacepool_init_data(
+    const void *xml, size_t n, psrp_runspacepool_init_data_t *out);
+
 #ifdef __cplusplus
 }
 #endif
