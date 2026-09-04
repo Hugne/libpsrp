@@ -57,11 +57,23 @@ struct psrp_session {
     ci_node_t *ci_head;
     int64_t next_ci;
 
+    /* 3.1.1.2.7 session key and the 3.1.1.2.8 transfer timeout. */
+    psrp_crypto_t *crypto;
+    bool key_exchange_running;
+    uint32_t key_timeout_ms;
+    uint32_t key_elapsed_ms;
+
     pipe_node_t *pipe_head;
 
     event_node_t *ev_head;
     event_node_t *ev_tail;
 };
+
+/* Defined further down, next to the other send paths; declared here because
+ * the key exchange needs it and sits above it. */
+static psrp_result_t emit(psrp_session_t *s, psrp_buffer_t *out, uint32_t type,
+                          const psrp_guid_t *pipeline_id,
+                          const void *data, size_t len);
 
 void psrp_event_free(psrp_event_t *e)
 {
@@ -111,6 +123,7 @@ psrp_session_t *psrp_session_new(void)
     s->pool_state = PSRP_RUNSPACE_BEFORE_OPEN;
     s->next_object_id = 1;      /* ObjectId 0 is illegal */
     s->next_ci = 1;
+    s->key_timeout_ms = 60000;  /* 3.1.1.2.8 recommends this value */
     psrp_session_capability_defaults(&s->local_capability);
     psrp_init_runspacepool_defaults(&s->init);
     return s;
@@ -137,10 +150,96 @@ void psrp_session_free(psrp_session_t *s)
         free(s->pipe_head);
         s->pipe_head = next;
     }
+    psrp_crypto_free(s->crypto);
     psrp_defrag_free(s->defrag);
     psrp_buffer_free(&s->outgoing);
     psrp_buffer_free(&s->outgoing_pr);
     free(s);
+}
+
+/* ------------------------------- session key exchange (3.1.5.4.3-5) ----- */
+
+psrp_crypto_t *psrp_session_crypto(psrp_session_t *s)
+{
+    return s ? s->crypto : NULL;
+}
+
+bool psrp_session_has_session_key(const psrp_session_t *s)
+{
+    return s && s->crypto && psrp_crypto_has_session_key(s->crypto);
+}
+
+void psrp_session_set_key_timeout(psrp_session_t *s, uint32_t milliseconds)
+{
+    if (s) s->key_timeout_ms = milliseconds;
+}
+
+uint32_t psrp_session_key_timeout(const psrp_session_t *s)
+{
+    return s ? s->key_timeout_ms : 0;
+}
+
+/* Builds and queues a PUBLIC_KEY, starting the transfer timer. Shared by the
+ * higher-layer request and the automatic reply to PUBLIC_KEY_REQUEST. */
+static psrp_result_t send_public_key(psrp_session_t *s)
+{
+    psrp_buffer_t body;
+    psrp_result_t rc;
+
+    if (!s->crypto) {
+        rc = psrp_crypto_new(&s->crypto);
+        if (rc != PSRP_OK) return rc;
+    }
+
+    psrp_buffer_init(&body);
+    rc = psrp_build_public_key(s->crypto, &body);
+    if (rc == PSRP_OK)
+        rc = emit(s, &s->outgoing, PSRP_MSG_PUBLIC_KEY, NULL, body.data,
+                  body.len);
+    psrp_buffer_free(&body);
+    if (rc != PSRP_OK) return rc;
+
+    /* 3.1.6: the timer starts when the message is sent, not when it is
+     * flushed, because that is when the client stops being able to act. */
+    s->key_exchange_running = true;
+    s->key_elapsed_ms = 0;
+    return PSRP_OK;
+}
+
+psrp_result_t psrp_session_start_key_exchange(psrp_session_t *s)
+{
+    if (!s) return PSRP_ERR_INVALID_ARG;
+    if (s->pool_state != PSRP_RUNSPACE_OPENED) return PSRP_ERR_STATE;
+    /* 3.1.4.8 step 1: ignore the request outright when a key is already
+     * registered or an exchange is under way. Ignoring is success, not an
+     * error; the caller asked for a key and there is going to be one. */
+    if (psrp_session_has_session_key(s) || s->key_exchange_running)
+        return PSRP_OK;
+    return send_public_key(s);
+}
+
+psrp_result_t psrp_session_tick(psrp_session_t *s, uint32_t elapsed_ms)
+{
+    psrp_event_t e;
+
+    if (!s) return PSRP_ERR_INVALID_ARG;
+    if (!s->key_exchange_running || s->key_timeout_ms == 0) return PSRP_OK;
+
+    /* Saturate rather than wrap: a caller reporting a very long gap must not
+     * loop the counter back under the timeout. */
+    if (elapsed_ms > (uint32_t)-1 - s->key_elapsed_ms)
+        s->key_elapsed_ms = (uint32_t)-1;
+    else
+        s->key_elapsed_ms += elapsed_ms;
+
+    if (s->key_elapsed_ms < s->key_timeout_ms) return PSRP_OK;
+
+    /* 3.1.2 and 3.1.6: expiry closes the RunspacePool. */
+    s->key_exchange_running = false;
+    s->pool_state = PSRP_RUNSPACE_BROKEN;
+    event_init(&e, PSRP_EVENT_SESSION_KEY_TIMEOUT, PSRP_MSG_PUBLIC_KEY, NULL);
+    e.state = PSRP_RUNSPACE_BROKEN;
+    return event_push(s, &e);
 }
 
 /* ------------------------------------------------- CI table (3.1.1.2.5) -- */
@@ -727,6 +826,27 @@ static psrp_result_t dispatch(psrp_session_t *s, const psrp_message_t *m)
         e.has_count = true;
         return event_push(s, &e);
     }
+
+    case PSRP_MSG_PUBLIC_KEY_REQUEST:
+        /* 3.1.5.4.5: the client MUST answer with a PUBLIC_KEY. There is
+         * nothing here for a caller to decide, so reply now and tell them
+         * only so they know to flush the output. */
+        rc = send_public_key(s);
+        if (rc != PSRP_OK) return rc;
+        event_init(&e, PSRP_EVENT_PUBLIC_KEY_REQUESTED, m->type, NULL);
+        return event_push(s, &e);
+
+    case PSRP_MSG_ENCRYPTED_SESSION_KEY:
+        /* 3.1.5.4.4. Without a crypto context there is no private key to
+         * decrypt with, which means this arrived unrequested. */
+        if (!s->crypto) return PSRP_ERR_STATE;
+        rc = psrp_parse_encrypted_session_key(s->crypto, xml, xml_len);
+        if (rc != PSRP_OK) return rc;
+        /* 3.1.6: receiving the key cancels the transfer timer. */
+        s->key_exchange_running = false;
+        s->key_elapsed_ms = 0;
+        event_init(&e, PSRP_EVENT_SESSION_KEY_READY, m->type, NULL);
+        return event_push(s, &e);
 
     case PSRP_MSG_USER_EVENT: {
         psrp_user_event_t ue;

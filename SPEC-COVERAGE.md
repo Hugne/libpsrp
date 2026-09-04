@@ -197,13 +197,13 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 3.1.1.2.5 | RunspacePool Information CI Table | done | done | unique call identifiers; cleared by RUNSPACE_AVAILABILITY |
 | 3.1.1.2.6 | Pipeline Table | done | done | entered on create, removed on Completed/Failed/Stopped |
 | 3.1.1.2.7 | Session Key | done | done | held by the crypto context once exchanged |
-| 3.1.1.2.8 | SessionKeyTransferTimeoutms | todo | todo | |
+| 3.1.1.2.8 | SessionKeyTransferTimeoutms | done | done | defaults to 60000; settable, 0 disables |
 | 3.1.1.3 | Pipeline Data | wip | wip | id/state/defrag done; WSMV command handle is the transport's |
 | 3.1.1.3.1 | GUID | done | done | pipeline id allocated per pipeline |
 | 3.1.1.3.2 | Pipeline State | done | done | surfaced as an event |
 | 3.1.1.3.3 | Defragmentation Data | done | done | shared session defragmenter |
 | 3.1.1.3.4 | WSMV Command | todo | todo | |
-| 3.1.2 | Timers | todo | todo | |
+| 3.1.2 | Timers | done | done | session key transfer timer, advanced by the caller |
 | 3.1.3 | Initialization | done | done | session construction; pool id generated |
 | 3.1.4 | Higher-Layer Triggered Events | wip | wip | create pool + execute pipeline done; the rest pending |
 | 3.1.4.1 | Creating a RunspacePool | done | done | open payload: SESSION_CAPABILITY + INIT_RUNSPACEPOOL |
@@ -248,9 +248,9 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 3.1.5.4.1.1 | Sending to the Server | done | done | sent once, in the open payload; moves to NegotiationSent |
 | 3.1.5.4.1.2 | Receiving from the Server | done | done | version check; NegotiationSucceeded or Broken. See TODO PSRP-11 |
 | 3.1.5.4.2 | INIT_RUNSPACEPOOL Message | done | done | sent once, alongside SESSION_CAPABILITY |
-| 3.1.5.4.3 | PUBLIC_KEY Message | todo | todo | |
-| 3.1.5.4.4 | ENCRYPTED_SESSION_KEY Message | todo | todo | |
-| 3.1.5.4.5 | PUBLIC_KEY_REQUEST Message | todo | todo | |
+| 3.1.5.4.3 | PUBLIC_KEY Message | done | done | higher-layer start plus automatic reply; starts the timer |
+| 3.1.5.4.4 | ENCRYPTED_SESSION_KEY Message | done | done | installs the key and cancels the timer |
+| 3.1.5.4.5 | PUBLIC_KEY_REQUEST Message | done | done | answered automatically, as the spec requires |
 | 3.1.5.4.6 | SET_MAX_RUNSPACES Message | done | done | requires Opened; allocates a call identifier |
 | 3.1.5.4.7 | SET_MIN_RUNSPACES Message | done | done | requires Opened; allocates a call identifier |
 | 3.1.5.4.8 | RUNSPACE_AVAILABILITY Message | done | done | clears the call identifier; unknown ones are surfaced |
@@ -277,7 +277,7 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 3.1.5.4.29 | CONNECT_RUNSPACEPOOL Message | todo | todo | |
 | 3.1.5.4.30 | RUNSPACEPOOL_INIT_DATA Message | todo | todo | |
 | 3.1.5.4.31 | RESET_RUNSPACE_STATE Message | done | done | requires Opened; allocates a call identifier |
-| 3.1.6 | Timer Events | todo | todo | |
+| 3.1.6 | Timer Events | done | done | expiry breaks the pool and raises an event |
 | 3.1.7 | Other Local Events | todo | todo | |
 
 ## Server Protocol Details (3.2)

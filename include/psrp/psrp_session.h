@@ -25,6 +25,7 @@
 #define PSRP_SESSION_H
 
 #include "psrp/psrp_messages.h"
+#include "psrp/psrp_crypto.h"
 #include "psrp/psrp_records.h"
 
 #ifdef __cplusplus
@@ -49,6 +50,9 @@ typedef enum psrp_event_kind {
     PSRP_EVENT_HOST_CALL,            /* server wants the client's host */
     PSRP_EVENT_USER_EVENT,           /* `text` holds the source identifier */
     PSRP_EVENT_RUNSPACE_AVAILABILITY,/* reply to a set/get runspaces request */
+    PSRP_EVENT_PUBLIC_KEY_REQUESTED, /* server asked for our public key */
+    PSRP_EVENT_SESSION_KEY_READY,    /* session key installed; SS now usable */
+    PSRP_EVENT_SESSION_KEY_TIMEOUT,  /* the exchange timed out; pool broken */
     PSRP_EVENT_POOL_INIT_DATA,       /* reply to CONNECT_RUNSPACEPOOL */
     PSRP_EVENT_UNKNOWN_MESSAGE       /* surfaced, not silently dropped */
 } psrp_event_kind_t;
@@ -143,6 +147,41 @@ size_t psrp_session_pipeline_count(const psrp_session_t *s);
 psrp_result_t psrp_session_pipeline_state(const psrp_session_t *s,
                                           const psrp_guid_t *id,
                                           int32_t *out);
+
+/* ---------------------- session key exchange (3.1.4.8, 3.1.5.4.3-5) ----- */
+/*
+ * A SecureString can only be sent once a session key is in place. The server
+ * may ask for the client's public key on its own (PUBLIC_KEY_REQUEST), or the
+ * higher layer may start the exchange itself.
+ *
+ * A PUBLIC_KEY_REQUEST is answered automatically: the spec says the client
+ * MUST respond, and there is nothing for a caller to decide. The reply is
+ * queued for the next take_output, and PSRP_EVENT_PUBLIC_KEY_REQUESTED is
+ * raised so the caller knows to flush it.
+ */
+
+/* 3.1.4.8. Requires an Opened pool. Does nothing and returns PSRP_OK if a key
+ * is already installed or an exchange is already running, which is what the
+ * spec asks for rather than an error. */
+psrp_result_t psrp_session_start_key_exchange(psrp_session_t *s);
+
+/* True once the session key is installed and SecureStrings can be sent. */
+bool psrp_session_has_session_key(const psrp_session_t *s);
+
+/* The session's crypto context, for encrypting a SecureString. NULL until a
+ * key exchange has been started. Owned by the session. */
+psrp_crypto_t *psrp_session_crypto(psrp_session_t *s);
+
+/* 3.1.1.2.8 SessionKeyTransferTimeoutms, defaulting to the 60000 the spec
+ * recommends. Setting 0 disables the timer. */
+void psrp_session_set_key_timeout(psrp_session_t *s, uint32_t milliseconds);
+uint32_t psrp_session_key_timeout(const psrp_session_t *s);
+
+/* Advances the session key transfer timer (3.1.2, 3.1.6). The library does no
+ * I/O and reads no clock, so the caller reports elapsed time. On expiry the
+ * pool is marked Broken and PSRP_EVENT_SESSION_KEY_TIMEOUT is raised, which is
+ * the closure the spec requires. Harmless to call when no timer is running. */
+psrp_result_t psrp_session_tick(psrp_session_t *s, uint32_t elapsed_ms);
 
 psrp_result_t psrp_session_take_output(psrp_session_t *s, psrp_buffer_t *out);
 

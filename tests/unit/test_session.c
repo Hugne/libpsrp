@@ -2,12 +2,16 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <windows.h>
+#include <bcrypt.h>
+
 #include "psrp/psrp.h"
 #include "psrp/psrp_session.h"
 #include "psrp/psrp_message.h"
 #include "psrp/psrp_fragment.h"
 #include "psrp/psrp_clixml.h"
 #include "psrp/psrp_host.h"
+#include "internal/psrp_codec.h"
 #include "psrp_test.h"
 
 /* A scripted in-memory server. Because the session does no I/O, an entire
@@ -75,6 +79,30 @@ static void server_send(psrp_session_t *s, uint32_t type,
         if (n > chunk) n = chunk;
         ASSERT_OK(psrp_session_receive(s, wire.data + i, n));
     }
+    psrp_buffer_free(&body);
+    psrp_buffer_free(&wire);
+}
+
+static void server_send_bytes(psrp_session_t *s, uint32_t type,
+                              const psrp_guid_t *pid, const char *xml,
+                              size_t xml_len)
+{
+    psrp_message_t m;
+    psrp_buffer_t body, wire;
+
+    memset(&m, 0, sizeof m);
+    m.destination = PSRP_DEST_CLIENT;
+    m.type = type;
+    m.rpid = *psrp_session_pool_id(s);
+    m.pid = pid ? *pid : psrp_guid_empty;
+    m.data = (const uint8_t *)xml;
+    m.data_len = xml_len;
+
+    psrp_buffer_init(&body);
+    psrp_buffer_init(&wire);
+    ASSERT_OK(psrp_message_encode(&body, &m));
+    ASSERT_OK(psrp_fragment_split(&wire, 2000 + type, body.data, body.len, 0));
+    ASSERT_OK(psrp_session_receive(s, wire.data, wire.len));
     psrp_buffer_free(&body);
     psrp_buffer_free(&wire);
 }
@@ -921,6 +949,327 @@ PSRP_TEST(host_call_surfaces_its_call_id_and_method)
     psrp_session_free(s);
 }
 
+/* ------------------------------ session key exchange (3.1.5.4.3-5) ------ */
+/*
+ * Testing the receive path needs a genuine ENCRYPTED_SESSION_KEY, which means
+ * doing the one thing a server does that this library deliberately does not:
+ * RSA-encrypting a session key to the client's public key. It is a dozen lines
+ * of CNG and it is the only way to prove the decrypt path works end to end, so
+ * it lives here in the test rather than in the library.
+ */
+
+#define PSRP_TEST_MODULUS_BYTES 256
+#define PSRP_TEST_SESSION_KEY_BYTES 32
+
+/* Turns the client's CryptoAPI PUBLICKEYBLOB into an ENCRYPTED_SESSION_KEY
+ * body carrying `key` encrypted to it. */
+static void make_encrypted_session_key(const psrp_buffer_t *pub_blob,
+                                       const unsigned char *key,
+                                       psrp_buffer_t *out)
+{
+    unsigned char cng[sizeof(BCRYPT_RSAKEY_BLOB) + 4 + PSRP_TEST_MODULUS_BYTES];
+    BCRYPT_RSAKEY_BLOB *hdr = (BCRYPT_RSAKEY_BLOB *)cng;
+    unsigned char *exp_be = cng + sizeof *hdr;
+    unsigned char *mod_be = exp_be + 4;
+    unsigned char cipher[PSRP_TEST_MODULUS_BYTES];
+    unsigned char simple[12 + PSRP_TEST_MODULUS_BYTES];
+    BCRYPT_ALG_HANDLE alg = NULL;
+    BCRYPT_KEY_HANDLE k = NULL;
+    ULONG produced = 0;
+    size_t i;
+    psrp_buffer_t b64;
+    char *xml;
+    size_t xml_len;
+
+    /* The exported blob is a 16-byte header, then the exponent and modulus
+     * little-endian. CNG wants them big-endian. */
+    ASSERT_EQ_SZ(pub_blob->len, (size_t)(16 + 4 + PSRP_TEST_MODULUS_BYTES));
+    memset(cng, 0, sizeof cng);
+    hdr->Magic = BCRYPT_RSAPUBLIC_MAGIC;
+    hdr->BitLength = PSRP_TEST_MODULUS_BYTES * 8;
+    hdr->cbPublicExp = 4;
+    hdr->cbModulus = PSRP_TEST_MODULUS_BYTES;
+    for (i = 0; i < 4; i++) exp_be[i] = pub_blob->data[16 + 3 - i];
+    for (i = 0; i < PSRP_TEST_MODULUS_BYTES; i++)
+        mod_be[i] = pub_blob->data[20 + PSRP_TEST_MODULUS_BYTES - 1 - i];
+
+    ASSERT_TRUE(BCryptOpenAlgorithmProvider(&alg, BCRYPT_RSA_ALGORITHM, NULL, 0)
+                == 0);
+    ASSERT_TRUE(BCryptImportKeyPair(alg, NULL, BCRYPT_RSAPUBLIC_BLOB, &k, cng,
+                                    (ULONG)sizeof cng, 0) == 0);
+    ASSERT_TRUE(BCryptEncrypt(k, (PUCHAR)key, PSRP_TEST_SESSION_KEY_BYTES,
+                              NULL, NULL, 0, cipher, (ULONG)sizeof cipher,
+                              &produced, BCRYPT_PAD_PKCS1) == 0);
+    ASSERT_EQ_SZ((size_t)produced, (size_t)PSRP_TEST_MODULUS_BYTES);
+    BCryptDestroyKey(k);
+    BCryptCloseAlgorithmProvider(alg, 0);
+
+    /* SIMPLEBLOB: type 1, version 2, the key algorithm, the exchange
+     * algorithm, then the ciphertext little-endian. */
+    memset(simple, 0, sizeof simple);
+    simple[0] = 0x01; simple[1] = 0x02;
+    simple[4] = 0x10; simple[5] = 0x66;      /* CALG_AES_256 */
+    simple[9] = 0xA4;                        /* CALG_RSA_KEYX */
+    for (i = 0; i < PSRP_TEST_MODULUS_BYTES; i++)
+        simple[12 + i] = cipher[PSRP_TEST_MODULUS_BYTES - 1 - i];
+
+    psrp_buffer_init(&b64);
+    ASSERT_OK(psrp_base64_encode_buf(&b64, simple, sizeof simple));
+
+    xml_len = b64.len + 64;
+    xml = (char *)malloc(xml_len);
+    ASSERT_NOT_NULL(xml);
+    xml_len = (size_t)snprintf(xml, xml_len,
+        "<Obj RefId=\"0\"><MS><S N=\"EncryptedSessionKey\">%.*s</S></MS></Obj>",
+        (int)b64.len, (const char *)b64.data);
+    ASSERT_OK(psrp_buffer_append(out, xml, xml_len));
+    free(xml);
+    psrp_buffer_free(&b64);
+}
+
+/* Plays the server's half: takes the queued PUBLIC_KEY and answers it. */
+static void reply_with_session_key(psrp_session_t *s)
+{
+    static const unsigned char key[PSRP_TEST_SESSION_KEY_BYTES] = {
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+        17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32
+    };
+    psrp_buffer_t queued, pub, body;
+
+    /* Drain the client's PUBLIC_KEY so it does not confuse later assertions. */
+    psrp_buffer_init(&queued);
+    (void)psrp_session_take_output(s, &queued);
+    psrp_buffer_free(&queued);
+
+    psrp_buffer_init(&pub);
+    ASSERT_OK(psrp_crypto_export_public_key(psrp_session_crypto(s), &pub));
+    psrp_buffer_init(&body);
+    make_encrypted_session_key(&pub, key, &body);
+    psrp_buffer_free(&pub);
+
+    server_send_bytes(s, PSRP_MSG_ENCRYPTED_SESSION_KEY, NULL,
+                      (const char *)body.data, body.len);
+    psrp_buffer_free(&body);
+}
+
+PSRP_TEST(key_exchange_requires_an_opened_pool)
+{
+    psrp_session_t *s = psrp_session_new();
+    ASSERT_NOT_NULL(s);
+    ASSERT_ERR(psrp_session_start_key_exchange(s), PSRP_ERR_STATE);
+    ASSERT_FALSE(psrp_session_has_session_key(s));
+    psrp_session_free(s);
+}
+
+PSRP_TEST(key_exchange_sends_a_public_key)
+{
+    psrp_session_t *s = psrp_session_new();
+    psrp_buffer_t wire;
+    psrp_message_t msgs[2];
+    psrp_buffer_t bodies[2];
+    size_t n;
+
+    ASSERT_NOT_NULL(s);
+    open_pool(s);
+    ASSERT_OK(psrp_session_start_key_exchange(s));
+
+    psrp_buffer_init(&wire);
+    ASSERT_OK(psrp_session_take_output(s, &wire));
+    n = decode_all(&wire, msgs, bodies, 2);
+    ASSERT_EQ_SZ(n, 1u);
+    ASSERT_EQ_SZ(msgs[0].type, PSRP_MSG_PUBLIC_KEY);
+    free_bodies(bodies, n);
+    psrp_buffer_free(&wire);
+    psrp_session_free(s);
+}
+
+PSRP_TEST(key_exchange_is_ignored_while_already_running)
+{
+    /* 3.1.4.8 step 1 says to ignore the request, not to fail it. A second
+     * PUBLIC_KEY would start a second timer for a key already on its way. */
+    psrp_session_t *s = psrp_session_new();
+    psrp_buffer_t wire;
+    psrp_message_t msgs[4];
+    psrp_buffer_t bodies[4];
+    size_t n;
+
+    ASSERT_NOT_NULL(s);
+    open_pool(s);
+    ASSERT_OK(psrp_session_start_key_exchange(s));
+    ASSERT_OK(psrp_session_start_key_exchange(s));
+
+    psrp_buffer_init(&wire);
+    ASSERT_OK(psrp_session_take_output(s, &wire));
+    n = decode_all(&wire, msgs, bodies, 4);
+    ASSERT_EQ_SZ(n, 1u);
+    free_bodies(bodies, n);
+    psrp_buffer_free(&wire);
+    psrp_session_free(s);
+}
+
+PSRP_TEST(public_key_request_is_answered_automatically)
+{
+    /* 3.1.5.4.5: the client MUST respond, so the session does it rather than
+     * making the caller notice. */
+    psrp_session_t *s = psrp_session_new();
+    psrp_buffer_t wire;
+    psrp_message_t msgs[2];
+    psrp_buffer_t bodies[2];
+    psrp_event_t e;
+    size_t n;
+
+    ASSERT_NOT_NULL(s);
+    open_pool(s);
+    server_send(s, PSRP_MSG_PUBLIC_KEY_REQUEST, NULL, "<S></S>", 0);
+    expect_event(s, PSRP_EVENT_PUBLIC_KEY_REQUESTED, &e);
+    psrp_event_free(&e);
+
+    psrp_buffer_init(&wire);
+    ASSERT_OK(psrp_session_take_output(s, &wire));
+    n = decode_all(&wire, msgs, bodies, 2);
+    ASSERT_EQ_SZ(n, 1u);
+    ASSERT_EQ_SZ(msgs[0].type, PSRP_MSG_PUBLIC_KEY);
+    free_bodies(bodies, n);
+    psrp_buffer_free(&wire);
+    psrp_session_free(s);
+}
+
+PSRP_TEST(encrypted_session_key_installs_the_key_and_stops_the_timer)
+{
+    psrp_session_t *s = psrp_session_new();
+    psrp_event_t e;
+
+    ASSERT_NOT_NULL(s);
+    open_pool(s);
+    ASSERT_OK(psrp_session_start_key_exchange(s));
+    ASSERT_FALSE(psrp_session_has_session_key(s));
+
+    reply_with_session_key(s);
+    expect_event(s, PSRP_EVENT_SESSION_KEY_READY, &e);
+    psrp_event_free(&e);
+    ASSERT_TRUE(psrp_session_has_session_key(s));
+
+    /* The timer is cancelled, so time passing no longer breaks the pool. */
+    ASSERT_OK(psrp_session_tick(s, 120000));
+    ASSERT_ERR(psrp_session_next_event(s, &e), PSRP_ERR_NOT_FOUND);
+    ASSERT_EQ_I(psrp_session_pool_state(s), PSRP_RUNSPACE_OPENED);
+
+    /* A key already in place means a further request is ignored. */
+    ASSERT_OK(psrp_session_start_key_exchange(s));
+    psrp_session_free(s);
+}
+
+PSRP_TEST(session_key_round_trips_a_secure_string)
+{
+    /* The point of the whole exchange: once the key is in, a SecureString can
+     * be encrypted and read back. */
+    psrp_session_t *s = psrp_session_new();
+    psrp_event_t e;
+    psrp_buffer_t cipher, plain;
+
+    ASSERT_NOT_NULL(s);
+    open_pool(s);
+    ASSERT_OK(psrp_session_start_key_exchange(s));
+    reply_with_session_key(s);
+    expect_event(s, PSRP_EVENT_SESSION_KEY_READY, &e);
+    psrp_event_free(&e);
+
+    psrp_buffer_init(&cipher);
+    psrp_buffer_init(&plain);
+    ASSERT_OK(psrp_crypto_encrypt_string(psrp_session_crypto(s), "hunter2", 7,
+                                         &cipher));
+    ASSERT_OK(psrp_crypto_decrypt_string(psrp_session_crypto(s), cipher.data,
+                                         cipher.len, &plain));
+    ASSERT_EQ_MEM(plain.data, plain.len, "hunter2", 7u);
+    psrp_buffer_free(&plain);
+    psrp_buffer_free(&cipher);
+    psrp_session_free(s);
+}
+
+PSRP_TEST(session_key_timeout_breaks_the_pool)
+{
+    /* 3.1.2 and 3.1.6: expiry closes the RunspacePool. */
+    psrp_session_t *s = psrp_session_new();
+    psrp_event_t e;
+
+    ASSERT_NOT_NULL(s);
+    open_pool(s);
+    ASSERT_EQ_I((int)psrp_session_key_timeout(s), 60000);
+    psrp_session_set_key_timeout(s, 5000);
+    ASSERT_OK(psrp_session_start_key_exchange(s));
+
+    /* Short of the timeout nothing happens. */
+    ASSERT_OK(psrp_session_tick(s, 4999));
+    ASSERT_ERR(psrp_session_next_event(s, &e), PSRP_ERR_NOT_FOUND);
+    ASSERT_EQ_I(psrp_session_pool_state(s), PSRP_RUNSPACE_OPENED);
+
+    ASSERT_OK(psrp_session_tick(s, 1));
+    expect_event(s, PSRP_EVENT_SESSION_KEY_TIMEOUT, &e);
+    ASSERT_EQ_I(e.state, PSRP_RUNSPACE_BROKEN);
+    psrp_event_free(&e);
+    ASSERT_EQ_I(psrp_session_pool_state(s), PSRP_RUNSPACE_BROKEN);
+
+    /* It fires once, not on every later tick. */
+    ASSERT_OK(psrp_session_tick(s, 60000));
+    ASSERT_ERR(psrp_session_next_event(s, &e), PSRP_ERR_NOT_FOUND);
+    psrp_session_free(s);
+}
+
+PSRP_TEST(ticking_without_an_exchange_does_nothing)
+{
+    psrp_session_t *s = psrp_session_new();
+    psrp_event_t e;
+
+    ASSERT_NOT_NULL(s);
+    open_pool(s);
+    ASSERT_OK(psrp_session_tick(s, 999999));
+    ASSERT_ERR(psrp_session_next_event(s, &e), PSRP_ERR_NOT_FOUND);
+    ASSERT_EQ_I(psrp_session_pool_state(s), PSRP_RUNSPACE_OPENED);
+
+    /* A zero timeout disables the timer entirely. */
+    psrp_session_set_key_timeout(s, 0);
+    ASSERT_OK(psrp_session_start_key_exchange(s));
+    ASSERT_OK(psrp_session_tick(s, 999999));
+    ASSERT_ERR(psrp_session_next_event(s, &e), PSRP_ERR_NOT_FOUND);
+    ASSERT_EQ_I(psrp_session_pool_state(s), PSRP_RUNSPACE_OPENED);
+    psrp_session_free(s);
+}
+
+PSRP_TEST(unrequested_session_key_is_refused)
+{
+    /* Without a public key of ours in play there is no private key to decrypt
+     * with, so a key arriving out of nowhere is a protocol error rather than
+     * something to quietly install. It surfaces from receive itself, since a
+     * server sending one unasked is not something to paper over. */
+    static const char xml[] =
+        "<Obj RefId=\"0\"><MS><S N=\"EncryptedSessionKey\">AAAA</S></MS></Obj>";
+    psrp_session_t *s = psrp_session_new();
+    psrp_message_t m;
+    psrp_buffer_t body, wire;
+
+    ASSERT_NOT_NULL(s);
+    open_pool(s);
+
+    memset(&m, 0, sizeof m);
+    m.destination = PSRP_DEST_CLIENT;
+    m.type = PSRP_MSG_ENCRYPTED_SESSION_KEY;
+    m.rpid = *psrp_session_pool_id(s);
+    m.pid = psrp_guid_empty;
+    m.data = (const uint8_t *)xml;
+    m.data_len = sizeof xml - 1;
+
+    psrp_buffer_init(&body);
+    psrp_buffer_init(&wire);
+    ASSERT_OK(psrp_message_encode(&body, &m));
+    ASSERT_OK(psrp_fragment_split(&wire, 7777, body.data, body.len, 0));
+    ASSERT_ERR(psrp_session_receive(s, wire.data, wire.len), PSRP_ERR_STATE);
+    ASSERT_FALSE(psrp_session_has_session_key(s));
+
+    psrp_buffer_free(&body);
+    psrp_buffer_free(&wire);
+    psrp_session_free(s);
+}
+
 static const psrp_test_case_t cases[] = {
     PSRP_TEST_CASE(session_starts_before_open_with_a_pool_id),
     PSRP_TEST_CASE(session_pool_ids_are_unique),
@@ -951,6 +1300,15 @@ static const psrp_test_case_t cases[] = {
     PSRP_TEST_CASE(pipeline_state_aimed_at_the_pool_is_ignored),
     PSRP_TEST_CASE(pipeline_state_for_an_unknown_pipeline_is_ignored),
     PSRP_TEST_CASE(host_call_surfaces_its_call_id_and_method),
+    PSRP_TEST_CASE(key_exchange_requires_an_opened_pool),
+    PSRP_TEST_CASE(key_exchange_sends_a_public_key),
+    PSRP_TEST_CASE(key_exchange_is_ignored_while_already_running),
+    PSRP_TEST_CASE(public_key_request_is_answered_automatically),
+    PSRP_TEST_CASE(encrypted_session_key_installs_the_key_and_stops_the_timer),
+    PSRP_TEST_CASE(session_key_round_trips_a_secure_string),
+    PSRP_TEST_CASE(session_key_timeout_breaks_the_pool),
+    PSRP_TEST_CASE(ticking_without_an_exchange_does_nothing),
+    PSRP_TEST_CASE(unrequested_session_key_is_refused),
 };
 
 PSRP_TEST_MAIN(cases)
