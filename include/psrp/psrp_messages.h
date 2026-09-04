@@ -157,6 +157,9 @@ typedef struct psrp_init_runspacepool {
     int32_t thread_options;    /* psrp_thread_options_t */
     int32_t apartment_state;   /* psrp_apartment_state_t */
     psrp_host_info_t host;
+    /* Optional ApplicationArguments (2.2.3.18). NULL sends Null, which the
+     * spec explicitly permits. Not owned. */
+    const psrp_value_t *application_arguments;
 } psrp_init_runspacepool_t;
 
 /* One runspace, default threading, unknown apartment, null host. */
@@ -247,6 +250,30 @@ typedef struct psrp_runspacepool_init_data {
 
 psrp_result_t psrp_parse_runspacepool_init_data(
     const void *xml, size_t n, psrp_runspacepool_init_data_t *out);
+
+/* ------------------------ 2.2.3.18 Primitive Dictionary ---------------- */
+/*
+ * A dictionary restricted to string keys and primitive values (or lists of
+ * primitives, or nested primitive dictionaries). ApplicationArguments in
+ * INIT_RUNSPACEPOOL is one, which is why it is here.
+ *
+ * It carries the type names the spec lists, which is how the far side knows
+ * to reconstruct a PSPrimitiveDictionary rather than a plain Hashtable.
+ */
+
+/* Creates an empty primitive dictionary value. */
+psrp_result_t psrp_primitive_dictionary_new(psrp_value_t *out);
+
+/* Adds one entry, taking ownership of *value on success. ScriptBlock and
+ * SecureString values are refused: 2.2.3.18 excludes both. */
+psrp_result_t psrp_primitive_dictionary_add(psrp_value_t *dict,
+                                            const char *key,
+                                            psrp_value_t *value);
+
+/* Convenience for the common string case. */
+psrp_result_t psrp_primitive_dictionary_add_string(psrp_value_t *dict,
+                                                   const char *key,
+                                                   const char *value);
 
 #ifdef __cplusplus
 }

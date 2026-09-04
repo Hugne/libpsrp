@@ -54,7 +54,9 @@ add_library(psrp STATIC
   src/crypto/crypto_cng.c
   src/state/hostdata.c
   src/proto/metadata.c
+  src/proto/primdict.c
   src/state/hostvalues.c
+  src/state/hostparams.c
 )
 add_library(psrp::psrp ALIAS psrp)
 

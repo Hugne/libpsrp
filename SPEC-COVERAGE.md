@@ -90,13 +90,13 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 2.2.3.15.1 | InvocationInfo-specific Extended Properties | todo | todo | |
 | 2.2.3.16 | InformationalRecord (DebugRecord, WarningRecord or VerboseRecord) | done | done | message + invocation-info flag |
 | 2.2.3.17 | Host Method Identifier | done | done | all 56 methods, with the returns-a-value rule |
-| 2.2.3.18 | Primitive Dictionary | todo | todo | |
+| 2.2.3.18 | Primitive Dictionary | done | done | builder enforces the string-key and primitive-value restriction |
 | 2.2.3.19 | CommandType | done | done | bit flags; well-known CommandTypes values named |
 | 2.2.3.20 | Wildcard | done | done | a String; backtick escapes are the caller's to write |
 | 2.2.3.21 | CommandMetadataCount | done | done | parse Count |
 | 2.2.3.22 | CommandMetadata | done | done | parse name, namespace, help uri, type, parameter names |
 | 2.2.3.23 | ParameterMetadata | wip | wip | parameter names surfaced; per-parameter detail deferred (TODO PSRP-10) |
-| 2.2.3.24 | ArgumentList | todo | todo | |
+| 2.2.3.24 | ArgumentList | done | done | optional on GET_COMMAND_METADATA; must be a list |
 | 2.2.3.25 | PSCredential | done | done | adapted properties, required type names, SecureString password |
 | 2.2.3.26 | KeyInfo | done | done | extended properties; build + read |
 | 2.2.3.27 | ControlKeyStates | done | done | all nine bit flags |
@@ -168,16 +168,16 @@ This file is the definition of "full spec coverage". Update it in the same commi
 
 | Section | Title | Impl | Tests | Notes |
 |---|---|---|---|---|
-| 2.2.6 | Encoding Host Parameters in Host Method Calls | wip | wip | mp surfaced as a parsed object; typed per-method decoding deferred (TODO PSRP-09) |
-| 2.2.6.1 | Encoding Individual Parameters | todo | todo | |
-| 2.2.6.1.1 | Any Serializable Type | todo | todo | |
-| 2.2.6.1.2 | CultureInfo | todo | todo | |
-| 2.2.6.1.3 | List | todo | todo | |
-| 2.2.6.1.4 | Array | todo | todo | |
-| 2.2.6.1.5 | Collection | todo | todo | |
-| 2.2.6.1.6 | Dictionary | todo | todo | |
-| 2.2.6.1.7 | Object Dictionary | todo | todo | |
-| 2.2.6.1.8 | Other Object Types Used in a Host Call | todo | todo | |
+| 2.2.6 | Encoding Host Parameters in Host Method Calls | done | done | list accessors plus wrapper and array decoding |
+| 2.2.6.1 | Encoding Individual Parameters | done | done | psrp_host_param_unwrap |
+| 2.2.6.1.1 | Any Serializable Type | done | done | not encoded; unwrap returns it unchanged |
+| 2.2.6.1.2 | CultureInfo | done | done | arrives as its ToString(), i.e. a plain string |
+| 2.2.6.1.3 | List | done | done | T/V wrapper |
+| 2.2.6.1.4 | Array | done | done | mae elements plus mal dimensions; mal must be non-empty |
+| 2.2.6.1.5 | Collection | done | done | same shape as List |
+| 2.2.6.1.6 | Dictionary | done | done | read through the DCT entries |
+| 2.2.6.1.7 | Object Dictionary | done | done | values are T/V wrappers |
+| 2.2.6.1.8 | Other Object Types Used in a Host Call | done | done | non-Null properties read from the extended bag |
 
 ## Client Protocol Details (3.1)
 

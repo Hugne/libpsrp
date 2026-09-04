@@ -48,7 +48,7 @@ PSRP_TEST(get_command_metadata_with_patterns)
     psrp_buffer_init(&xml);
     psrp_value_init(&root);
     ASSERT_OK(psrp_build_get_command_metadata(patterns, 2,
-                                              PSRP_COMMAND_TYPE_CMDLET, &xml));
+                                              PSRP_COMMAND_TYPE_CMDLET, NULL, &xml));
     ASSERT_OK(psrp_clixml_deserialize(xml.data, xml.len, &root));
 
     name = psrp_object_find(root.as.obj, "Name");
@@ -82,7 +82,7 @@ PSRP_TEST(get_command_metadata_without_patterns_sends_null)
     psrp_buffer_init(&xml);
     psrp_value_init(&root);
     ASSERT_OK(psrp_build_get_command_metadata(NULL, 0,
-                                              PSRP_COMMAND_TYPE_ALL, &xml));
+                                              PSRP_COMMAND_TYPE_ALL, NULL, &xml));
     ASSERT_OK(psrp_clixml_deserialize(xml.data, xml.len, &root));
     ASSERT_EQ_I(psrp_object_find(root.as.obj, "Name")->kind, PSRP_VAL_NULL);
     psrp_value_free(&root);
@@ -96,7 +96,7 @@ PSRP_TEST(get_command_metadata_with_combined_flags)
     psrp_buffer_init(&xml);
     ASSERT_OK(psrp_build_get_command_metadata(NULL, 0,
         PSRP_COMMAND_TYPE_ALIAS | PSRP_COMMAND_TYPE_FUNCTION |
-        PSRP_COMMAND_TYPE_FILTER | PSRP_COMMAND_TYPE_CMDLET, &xml));
+        PSRP_COMMAND_TYPE_FILTER | PSRP_COMMAND_TYPE_CMDLET, NULL, &xml));
     ASSERT_TRUE(xml_contains(&xml, "<I32>15</I32>"));
     ASSERT_TRUE(xml_contains(&xml, "<ToString>15</ToString>"));
     psrp_buffer_free(&xml);
@@ -107,11 +107,11 @@ PSRP_TEST(get_command_metadata_rejects_bad_args)
     psrp_buffer_t xml;
     static const char *bad[1] = { NULL };
     psrp_buffer_init(&xml);
-    ASSERT_ERR(psrp_build_get_command_metadata(NULL, 0, 0, NULL),
+    ASSERT_ERR(psrp_build_get_command_metadata(NULL, 0, 0, NULL, NULL),
                PSRP_ERR_INVALID_ARG);
-    ASSERT_ERR(psrp_build_get_command_metadata(NULL, 2, 0, &xml),
+    ASSERT_ERR(psrp_build_get_command_metadata(NULL, 2, 0, NULL, &xml),
                PSRP_ERR_INVALID_ARG);
-    ASSERT_ERR(psrp_build_get_command_metadata(bad, 1, 0, &xml),
+    ASSERT_ERR(psrp_build_get_command_metadata(bad, 1, 0, NULL, &xml),
                PSRP_ERR_INVALID_ARG);
     psrp_buffer_free(&xml);
 }
@@ -295,12 +295,61 @@ PSRP_TEST(user_event_reaches_the_session_as_an_event)
     psrp_session_free(s);
 }
 
+PSRP_TEST(get_command_metadata_carries_an_argument_list)
+{
+    /* 2.2.3.24: a list of arbitrary objects the server's higher layer may use
+     * to shape what parameter metadata comes back. */
+    psrp_buffer_t xml;
+    psrp_value_t args, item;
+    psrp_object_t *lst;
+
+    lst = psrp_object_new();
+    ASSERT_NOT_NULL(lst);
+    psrp_object_set_ref_id(lst, 5);
+    psrp_object_set_container(lst, PSRP_CONTAINER_LIST);
+    psrp_value_init(&item);
+    ASSERT_OK(psrp_value_set_string(&item, "extra-argument"));
+    ASSERT_OK(psrp_object_add_item(lst, &item));
+    psrp_value_free(&item);
+
+    psrp_value_init(&args);
+    ASSERT_OK(psrp_value_set_object(&args, lst));
+
+    psrp_buffer_init(&xml);
+    ASSERT_OK(psrp_build_get_command_metadata(NULL, 0,
+                                              PSRP_COMMAND_TYPE_ALL,
+                                              &args, &xml));
+    ASSERT_TRUE(xml_contains(&xml, "N=\"ArgumentList\""));
+    ASSERT_TRUE(xml_contains(&xml, "extra-argument"));
+    /* The caller keeps their list; it was copied, not consumed. */
+    ASSERT_EQ_SZ(psrp_object_item_count(args.as.obj), 1u);
+
+    psrp_buffer_free(&xml);
+    psrp_value_free(&args);
+}
+
+PSRP_TEST(get_command_metadata_rejects_a_non_list_argument_list)
+{
+    psrp_buffer_t xml;
+    psrp_value_t args;
+
+    psrp_value_init(&args);
+    ASSERT_OK(psrp_value_set_string(&args, "not a list"));
+    psrp_buffer_init(&xml);
+    ASSERT_ERR(psrp_build_get_command_metadata(NULL, 0, 0, &args, &xml),
+               PSRP_ERR_INVALID_ARG);
+    psrp_buffer_free(&xml);
+    psrp_value_free(&args);
+}
+
 static const psrp_test_case_t cases[] = {
     PSRP_TEST_CASE(command_type_names),
     PSRP_TEST_CASE(get_command_metadata_with_patterns),
     PSRP_TEST_CASE(get_command_metadata_without_patterns_sends_null),
     PSRP_TEST_CASE(get_command_metadata_with_combined_flags),
     PSRP_TEST_CASE(get_command_metadata_rejects_bad_args),
+    PSRP_TEST_CASE(get_command_metadata_carries_an_argument_list),
+    PSRP_TEST_CASE(get_command_metadata_rejects_a_non_list_argument_list),
     PSRP_TEST_CASE(command_metadata_count_parses_spec_example),
     PSRP_TEST_CASE(command_metadata_count_requires_count),
     PSRP_TEST_CASE(command_metadata_parses_spec_example),

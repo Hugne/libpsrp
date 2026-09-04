@@ -219,8 +219,21 @@ psrp_result_t psrp_build_init_runspacepool(const psrp_init_runspacepool_t *init,
         child = build_host_info(&g, &init->host);
         rc = child ? add_object(root, "HostInfo", child) : PSRP_ERR_NOMEM;
     }
-    /* ApplicationArguments is optional; Null is explicitly allowed. */
-    if (rc == PSRP_OK) rc = add_null(root, "ApplicationArguments");
+    /* ApplicationArguments is optional; Null is explicitly allowed. It is
+     * cloned rather than moved so the caller can reuse the same bag for a
+     * second pool without it being consumed here. */
+    if (rc == PSRP_OK) {
+        if (init->application_arguments) {
+            psrp_value_t copy;
+            rc = psrp_value_clone(init->application_arguments, &copy);
+            if (rc == PSRP_OK)
+                rc = psrp_object_add_extended(root, "ApplicationArguments",
+                                              &copy);
+            psrp_value_free(&copy);
+        } else {
+            rc = add_null(root, "ApplicationArguments");
+        }
+    }
 
     if (rc != PSRP_OK) { psrp_object_free(root); return rc; }
 

@@ -181,6 +181,15 @@ psrp_result_t psrp_object_add_entry(psrp_object_t *o, psrp_value_t *key,
 size_t psrp_object_entry_count(const psrp_object_t *o);
 const psrp_dict_entry_t *psrp_object_entry(const psrp_object_t *o, size_t i);
 
+/* Deep copies. Needed because every add_* entry point takes ownership of the
+ * value it is given, so handing one value to two messages requires a copy.
+ * RefIds are preserved verbatim; the writer assigns its own when serializing. */
+psrp_result_t psrp_value_clone(const psrp_value_t *src, psrp_value_t *dst);
+psrp_result_t psrp_object_clone(const psrp_object_t *src, psrp_object_t **out);
+
+/* True when the kind stores its content as text rather than in the union. */
+bool psrp_value_kind_has_text(psrp_value_kind_t kind);
+
 /* Extended primitive object (2.2.5.2.5): an <Obj> whose content is a
  * primitive value alongside ToString / extended properties. */
 psrp_result_t psrp_object_set_primitive(psrp_object_t *o, psrp_value_t *value);

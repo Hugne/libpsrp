@@ -312,3 +312,112 @@ const psrp_value_t *psrp_object_primitive(const psrp_object_t *o)
     if (!o || !o->has_primitive) return NULL;
     return &o->primitive;
 }
+
+/* --------------------------------------------------------------- clone -- */
+/*
+ * A deep copy. Callers that want to hand the same value to two messages need
+ * this, because every add_* entry point takes ownership of what it is given.
+ *
+ * RefIds are copied verbatim rather than renumbered. They are only meaningful
+ * within one serialized document, and the writer assigns its own on the way
+ * out, so preserving them here keeps clone a faithful copy rather than a
+ * partial rewrite.
+ */
+
+psrp_result_t psrp_value_clone(const psrp_value_t *src, psrp_value_t *dst)
+{
+    if (!src || !dst) return PSRP_ERR_INVALID_ARG;
+    psrp_value_init(dst);
+
+    switch (src->kind) {
+    case PSRP_VAL_BYTES:
+        return psrp_value_set_bytes(dst, src->as.bytes.ptr, src->as.bytes.len);
+    case PSRP_VAL_OBJECT: {
+        psrp_object_t *copy;
+        psrp_result_t rc = psrp_object_clone(src->as.obj, &copy);
+        if (rc != PSRP_OK) return rc;
+        rc = psrp_value_set_object(dst, copy);
+        if (rc != PSRP_OK) psrp_object_free(copy);
+        return rc;
+    }
+    default:
+        if (psrp_value_kind_has_text(src->kind))
+            return psrp_value_set_text(dst, src->kind, src->as.text.ptr,
+                                       src->as.text.len);
+        /* Everything else is a scalar living inside the union. */
+        *dst = *src;
+        return PSRP_OK;
+    }
+}
+
+static psrp_result_t clone_props(psrp_object_t *dst, const psrp_property_t *src,
+                                 size_t n, bool extended)
+{
+    size_t i;
+    for (i = 0; i < n; i++) {
+        psrp_value_t v;
+        psrp_result_t rc = psrp_value_clone(&src[i].value, &v);
+        if (rc != PSRP_OK) return rc;
+        rc = extended ? psrp_object_add_extended(dst, src[i].name, &v)
+                      : psrp_object_add_adapted(dst, src[i].name, &v);
+        psrp_value_free(&v);
+        if (rc != PSRP_OK) return rc;
+    }
+    return PSRP_OK;
+}
+
+psrp_result_t psrp_object_clone(const psrp_object_t *src, psrp_object_t **out)
+{
+    psrp_object_t *o;
+    psrp_result_t rc = PSRP_OK;
+    size_t i;
+
+    if (!src || !out) return PSRP_ERR_INVALID_ARG;
+    *out = NULL;
+    o = psrp_object_new();
+    if (!o) return PSRP_ERR_NOMEM;
+
+    o->ref_id = src->ref_id;
+    o->type_ref_id = src->type_ref_id;
+    o->container = src->container;
+
+    for (i = 0; i < src->type_name_count && rc == PSRP_OK; i++)
+        rc = psrp_object_add_type_name(o, src->type_names[i]);
+
+    if (rc == PSRP_OK && src->to_string)
+        rc = psrp_object_set_to_string(o, src->to_string, src->to_string_len);
+
+    if (rc == PSRP_OK)
+        rc = clone_props(o, src->adapted, src->adapted_count, false);
+    if (rc == PSRP_OK)
+        rc = clone_props(o, src->extended, src->extended_count, true);
+
+    for (i = 0; i < src->item_count && rc == PSRP_OK; i++) {
+        psrp_value_t v;
+        rc = psrp_value_clone(&src->items[i], &v);
+        if (rc == PSRP_OK) rc = psrp_object_add_item(o, &v);
+        psrp_value_free(&v);
+    }
+
+    for (i = 0; i < src->entry_count && rc == PSRP_OK; i++) {
+        psrp_value_t k, v;
+        rc = psrp_value_clone(&src->entries[i].key, &k);
+        if (rc == PSRP_OK) {
+            rc = psrp_value_clone(&src->entries[i].value, &v);
+            if (rc == PSRP_OK) rc = psrp_object_add_entry(o, &k, &v);
+            psrp_value_free(&v);
+        }
+        psrp_value_free(&k);
+    }
+
+    if (rc == PSRP_OK && src->has_primitive) {
+        psrp_value_t v;
+        rc = psrp_value_clone(&src->primitive, &v);
+        if (rc == PSRP_OK) rc = psrp_object_set_primitive(o, &v);
+        psrp_value_free(&v);
+    }
+
+    if (rc != PSRP_OK) { psrp_object_free(o); return rc; }
+    *out = o;
+    return PSRP_OK;
+}

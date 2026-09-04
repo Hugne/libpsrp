@@ -269,6 +269,44 @@ psrp_result_t psrp_host_make_credential(const char *username,
 psrp_result_t psrp_host_read_credential(const psrp_value_t *v, char **username,
                                         char **password_ciphertext_b64);
 
+/* -------------------- host method parameters (2.2.6) ------------------- */
+/*
+ * A host call's `mp` is a list of parameters. How each element is encoded
+ * depends on its type (2.2.6.1):
+ *
+ *   - A plainly serializable value is NOT encoded at all; it appears as
+ *     itself (2.2.6.1.1). This is the common case.
+ *   - Lists and collections become a T/V wrapper whose V is a list
+ *     (2.2.6.1.3, 2.2.6.1.5).
+ *   - Arrays become an object with `mae` (elements flattened deepest-first)
+ *     and `mal` (the size of each dimension) (2.2.6.1.4).
+ *   - CultureInfo is reduced to its ToString() (2.2.6.1.2).
+ *
+ * Because an unencoded value and a wrapped one are both possible, callers
+ * should read a parameter through psrp_host_param_unwrap rather than
+ * assuming either shape.
+ */
+
+/* Number of parameters in a host call's `mp` value; 0 if it is absent. */
+size_t psrp_host_param_count(const psrp_value_t *mp);
+
+/* The parameter at `index`, or NULL when out of range. */
+const psrp_value_t *psrp_host_param(const psrp_value_t *mp, size_t index);
+
+/* Returns the value a parameter carries. If it is a T/V wrapper the inner V
+ * is returned and *type_name (when given) is set to the T string; otherwise
+ * the value is returned unchanged with *type_name set to NULL, which is what
+ * 2.2.6.1.1 describes. Never returns NULL for a non-NULL input. */
+const psrp_value_t *psrp_host_param_unwrap(const psrp_value_t *v,
+                                           const char **type_name);
+
+/* 2.2.6.1.4 array parameter. `elements` receives the flattened `mae` list
+ * object and `dimensions` the `mal` list of sizes; either may be NULL.
+ * Returns PSRP_ERR_MALFORMED when the value is not an encoded array. */
+psrp_result_t psrp_host_param_array(const psrp_value_t *v,
+                                    const psrp_value_t **elements,
+                                    const psrp_value_t **dimensions);
+
 #ifdef __cplusplus
 }
 #endif

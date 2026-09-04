@@ -89,6 +89,11 @@ void psrp_value_init(psrp_value_t *v)
     v->kind = PSRP_VAL_NULL;
 }
 
+bool psrp_value_kind_has_text(psrp_value_kind_t kind)
+{
+    return kind_is_text(kind);
+}
+
 void psrp_value_free(psrp_value_t *v)
 {
     if (!v) return;

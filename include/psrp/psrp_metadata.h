@@ -38,11 +38,18 @@ const char *psrp_command_type_name(int32_t command_type);
  * character is a backtick rather than a backslash. Passing none sends Null,
  * which the spec defines as meaning a single "*".
  *
- * Namespace and ArgumentList are sent as Null; the spec gives Null the same
- * meaning as a list with one empty string, so there is nothing to lose. */
+ * Namespace is sent as Null; the spec gives Null the same meaning as a list
+ * with one empty string, so there is nothing to lose.
+ *
+ * `argument_list` is the optional 2.2.3.24 ArgumentList: a list of arbitrary
+ * objects the server's higher layer may use to shape the parameter metadata
+ * it returns. Pass NULL to send Null, which means no arguments. It is copied,
+ * not consumed. Passing a value that is not a list is rejected, since the
+ * spec says ArgumentList MUST be one. */
 psrp_result_t psrp_build_get_command_metadata(const char *const *name_patterns,
                                               size_t pattern_count,
                                               int32_t command_type,
+                                              const psrp_value_t *argument_list,
                                               psrp_buffer_t *out);
 
 /* 2.2.3.21 CommandMetadataCount: the first object of the result stream. */

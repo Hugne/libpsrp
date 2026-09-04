@@ -80,6 +80,7 @@ static psrp_result_t root_object(const void *xml, size_t n, psrp_value_t *root)
 psrp_result_t psrp_build_get_command_metadata(const char *const *name_patterns,
                                               size_t pattern_count,
                                               int32_t command_type,
+                                              const psrp_value_t *argument_list,
                                               psrp_buffer_t *out)
 {
     psrp_object_t *root, *names, *type_obj;
@@ -89,6 +90,13 @@ psrp_result_t psrp_build_get_command_metadata(const char *const *name_patterns,
 
     if (!out) return PSRP_ERR_INVALID_ARG;
     if (pattern_count && !name_patterns) return PSRP_ERR_INVALID_ARG;
+    /* 2.2.3.24 says ArgumentList MUST be a list. Catching that here beats
+     * having the server reject the whole request for it. */
+    if (argument_list) {
+        if (argument_list->kind != PSRP_VAL_OBJECT ||
+            psrp_object_container(argument_list->as.obj) != PSRP_CONTAINER_LIST)
+            return PSRP_ERR_INVALID_ARG;
+    }
 
     root = psrp_object_new();
     if (!root) return PSRP_ERR_NOMEM;
@@ -159,16 +167,19 @@ psrp_result_t psrp_build_get_command_metadata(const char *const *name_patterns,
         }
     }
 
-    /* Null Namespace means a list with one empty string, and Null
-     * ArgumentList means none: both are what we want. */
+    /* Null Namespace means a list with one empty string, which is what we
+     * want when no namespace filter was asked for. */
     if (rc == PSRP_OK) {
         psrp_value_set_null(&v);
         rc = psrp_object_add_extended(root, "Namespace", &v);
         psrp_value_free(&v);
     }
+    /* ArgumentList (2.2.3.24), copied so the caller keeps theirs. */
     if (rc == PSRP_OK) {
-        psrp_value_set_null(&v);
-        rc = psrp_object_add_extended(root, "ArgumentList", &v);
+        if (argument_list) rc = psrp_value_clone(argument_list, &v);
+        else psrp_value_set_null(&v);
+        if (rc == PSRP_OK)
+            rc = psrp_object_add_extended(root, "ArgumentList", &v);
         psrp_value_free(&v);
     }
 
