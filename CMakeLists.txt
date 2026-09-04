@@ -36,6 +36,7 @@ add_library(psrp STATIC
   src/core/codec.c
   src/proto/fragment.c
   src/proto/defrag.c
+  src/proto/message.c
 )
 add_library(psrp::psrp ALIAS psrp)
 

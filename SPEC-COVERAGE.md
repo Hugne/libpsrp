@@ -24,14 +24,14 @@ This file is the definition of "full spec coverage". Update it in the same commi
 
 | Section | Title | Impl | Tests | Notes |
 |---|---|---|---|---|
-| 2.2.1 | PowerShell Remoting Protocol Message | todo | todo | |
+| 2.2.1 | PowerShell Remoting Protocol Message | done | done | 40-byte header, little-endian per 2.2; GUIDs in .NET field order; unknown types preserved |
 | 2.2.4 | Packet Fragment | done | done | encode/decode/split + streaming defragmenter; reserved bits ignored on receipt |
 
 ## Message Types (2.2.2)
 
 | Section | Title | Impl | Tests | Notes |
 |---|---|---|---|---|
-| 2.2.2 | Message Types | todo | todo | |
+| 2.2.2 | Message Types | wip | wip | all 31 type codes done + verified; per-message Data bodies need CLIXML (2.2.5) |
 | 2.2.2.1 | SESSION_CAPABILITY Message | todo | todo | |
 | 2.2.2.2 | INIT_RUNSPACEPOOL Message | todo | todo | |
 | 2.2.2.3 | PUBLIC_KEY Message | todo | todo | |
