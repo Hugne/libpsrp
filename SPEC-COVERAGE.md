@@ -185,17 +185,17 @@ This file is the definition of "full spec coverage". Update it in the same commi
 |---|---|---|---|---|
 | 3.1 | Client Details | wip | wip | session state machine (sans-IO) done; host calls, key exchange, disconnect/reconnect pending |
 | 3.1.1 | Abstract Data Model | wip | wip | pool + pipeline data modelled; session key and CI tables pending |
-| 3.1.1.1 | Global Data | todo | todo | |
-| 3.1.1.1.1 | WSMV ShellID to RunspacePool Table | todo | todo | |
-| 3.1.1.1.2 | WSMV CommandId to Pipeline Table | todo | todo | |
+| 3.1.1.1 | Global Data | done | done | pool id, CI table and pipeline table live in the session |
+| 3.1.1.1.1 | WSMV ShellID to RunspacePool Table | done | done | one session per shell; the transport holds the shell handle |
+| 3.1.1.1.2 | WSMV CommandId to Pipeline Table | done | done | pipeline table keyed by pipeline GUID |
 | 3.1.1.1.3 | Public Key Pair | done | done | 2048-bit RSA generated per crypto context |
 | 3.1.1.2 | RunspacePool Data | wip | wip | id/state/defrag done; session key + information tables pending |
 | 3.1.1.2.1 | GUID | done | done | pool id, random v4 from the platform CSPRNG |
 | 3.1.1.2.2 | RunspacePool State | done | done | tracked and exposed |
 | 3.1.1.2.3 | Defragmentation Data | done | done | per-session defragmenter |
 | 3.1.1.2.4 | WSMV Shell | todo | todo | |
-| 3.1.1.2.5 | RunspacePool Information CI Table | todo | todo | |
-| 3.1.1.2.6 | Pipeline Table | todo | todo | |
+| 3.1.1.2.5 | RunspacePool Information CI Table | done | done | unique call identifiers; cleared by RUNSPACE_AVAILABILITY |
+| 3.1.1.2.6 | Pipeline Table | done | done | entered on create, removed on Completed/Failed/Stopped |
 | 3.1.1.2.7 | Session Key | done | done | held by the crypto context once exchanged |
 | 3.1.1.2.8 | SessionKeyTransferTimeoutms | todo | todo | |
 | 3.1.1.3 | Pipeline Data | wip | wip | id/state/defrag done; WSMV command handle is the transport's |
@@ -243,40 +243,40 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 3.1.5.3.17 | Rules for the wxf:DisconnectResponse Message | todo | todo | |
 | 3.1.5.3.18 | Rules for the wxf:Reconnect Message | todo | todo | |
 | 3.1.5.3.19 | Rules for the wxf:ReconnectResponse Message | todo | todo | |
-| 3.1.5.4 | Rules for Processing PSRP Messages | todo | todo | |
-| 3.1.5.4.1 | SESSION_CAPABILITY Message | todo | todo | |
-| 3.1.5.4.1.1 | Sending to the Server | todo | todo | |
-| 3.1.5.4.1.2 | Receiving from the Server | todo | todo | |
-| 3.1.5.4.2 | INIT_RUNSPACEPOOL Message | todo | todo | |
+| 3.1.5.4 | Rules for Processing PSRP Messages | done | done | state preconditions enforced on send and receive |
+| 3.1.5.4.1 | SESSION_CAPABILITY Message | done | done |  |
+| 3.1.5.4.1.1 | Sending to the Server | done | done | sent once, in the open payload; moves to NegotiationSent |
+| 3.1.5.4.1.2 | Receiving from the Server | done | done | version check; NegotiationSucceeded or Broken. See TODO PSRP-11 |
+| 3.1.5.4.2 | INIT_RUNSPACEPOOL Message | done | done | sent once, alongside SESSION_CAPABILITY |
 | 3.1.5.4.3 | PUBLIC_KEY Message | todo | todo | |
 | 3.1.5.4.4 | ENCRYPTED_SESSION_KEY Message | todo | todo | |
 | 3.1.5.4.5 | PUBLIC_KEY_REQUEST Message | todo | todo | |
-| 3.1.5.4.6 | SET_MAX_RUNSPACES Message | todo | todo | |
-| 3.1.5.4.7 | SET_MIN_RUNSPACES Message | todo | todo | |
-| 3.1.5.4.8 | RUNSPACE_AVAILABILITY Message | todo | todo | |
-| 3.1.5.4.9 | RUNSPACEPOOL_STATE Message | todo | todo | |
-| 3.1.5.4.10 | CREATE_PIPELINE Message | todo | todo | |
-| 3.1.5.4.11 | GET_AVAILABLE_RUNSPACES Message | todo | todo | |
-| 3.1.5.4.12 | USER_EVENT Message | todo | todo | |
-| 3.1.5.4.13 | APPLICATION_PRIVATE_DATA Message | todo | todo | |
-| 3.1.5.4.14 | GET_COMMAND_METADATA Message | todo | todo | |
-| 3.1.5.4.15 | RUNSPACEPOOL_HOST_CALL Message | todo | todo | |
-| 3.1.5.4.16 | RUNSPACEPOOL_HOST_RESPONSE Message | todo | todo | |
-| 3.1.5.4.17 | PIPELINE_INPUT Message | todo | todo | |
-| 3.1.5.4.18 | END_OF_PIPELINE_INPUT Message | todo | todo | |
-| 3.1.5.4.19 | PIPELINE_OUTPUT Message | todo | todo | |
-| 3.1.5.4.20 | ERROR_RECORD Message | todo | todo | |
-| 3.1.5.4.21 | PIPELINE_STATE Message | todo | todo | |
-| 3.1.5.4.22 | DEBUG_RECORD Message | todo | todo | |
-| 3.1.5.4.23 | VERBOSE_RECORD Message | todo | todo | |
-| 3.1.5.4.24 | WARNING_RECORD Message | todo | todo | |
-| 3.1.5.4.25 | PROGRESS_RECORD Message | todo | todo | |
-| 3.1.5.4.26 | INFORMATION_RECORD Message | todo | todo | |
-| 3.1.5.4.27 | PIPELINE_HOST_CALL Message | todo | todo | |
-| 3.1.5.4.28 | PIPELINE_HOST_RESPONSE Message | todo | todo | |
+| 3.1.5.4.6 | SET_MAX_RUNSPACES Message | done | done | requires Opened; allocates a call identifier |
+| 3.1.5.4.7 | SET_MIN_RUNSPACES Message | done | done | requires Opened; allocates a call identifier |
+| 3.1.5.4.8 | RUNSPACE_AVAILABILITY Message | done | done | clears the call identifier; unknown ones are surfaced |
+| 3.1.5.4.9 | RUNSPACEPOOL_STATE Message | done | done | ignored once Closed or Broken |
+| 3.1.5.4.10 | CREATE_PIPELINE Message | done | done | requires Opened; pipeline enters the table as Running |
+| 3.1.5.4.11 | GET_AVAILABLE_RUNSPACES Message | done | done | requires Opened; allocates a call identifier |
+| 3.1.5.4.12 | USER_EVENT Message | done | done | surfaced as its own event |
+| 3.1.5.4.13 | APPLICATION_PRIVATE_DATA Message | done | done | surfaced with the object intact |
+| 3.1.5.4.14 | GET_COMMAND_METADATA Message | done | done | builder plus both result parsers |
+| 3.1.5.4.15 | RUNSPACEPOOL_HOST_CALL Message | done | done | ci and method id surfaced with the parameters |
+| 3.1.5.4.16 | RUNSPACEPOOL_HOST_RESPONSE Message | done | done | quotes the call's ci; goes out on the pr stream |
+| 3.1.5.4.17 | PIPELINE_INPUT Message | done | done | refused unless the pipeline is Running |
+| 3.1.5.4.18 | END_OF_PIPELINE_INPUT Message | done | done | refused unless the pipeline is Running |
+| 3.1.5.4.19 | PIPELINE_OUTPUT Message | done | done | surfaced as an event carrying the object |
+| 3.1.5.4.20 | ERROR_RECORD Message | done | done | surfaced as an event |
+| 3.1.5.4.21 | PIPELINE_STATE Message | done | done | pool-targeted and unknown-pipeline messages ignored |
+| 3.1.5.4.22 | DEBUG_RECORD Message | done | done | surfaced as an event |
+| 3.1.5.4.23 | VERBOSE_RECORD Message | done | done | surfaced as an event |
+| 3.1.5.4.24 | WARNING_RECORD Message | done | done | surfaced as an event |
+| 3.1.5.4.25 | PROGRESS_RECORD Message | done | done | surfaced as an event |
+| 3.1.5.4.26 | INFORMATION_RECORD Message | done | done | surfaced as an event |
+| 3.1.5.4.27 | PIPELINE_HOST_CALL Message | done | done | ci and method id surfaced with the parameters |
+| 3.1.5.4.28 | PIPELINE_HOST_RESPONSE Message | done | done | quotes the call's ci; goes out on the pr stream |
 | 3.1.5.4.29 | CONNECT_RUNSPACEPOOL Message | todo | todo | |
 | 3.1.5.4.30 | RUNSPACEPOOL_INIT_DATA Message | todo | todo | |
-| 3.1.5.4.31 | RESET_RUNSPACE_STATE Message | todo | todo | |
+| 3.1.5.4.31 | RESET_RUNSPACE_STATE Message | done | done | requires Opened; allocates a call identifier |
 | 3.1.6 | Timer Events | todo | todo | |
 | 3.1.7 | Other Local Events | todo | todo | |
 

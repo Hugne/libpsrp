@@ -48,6 +48,8 @@ typedef enum psrp_event_kind {
     PSRP_EVENT_INFORMATION_RECORD,
     PSRP_EVENT_HOST_CALL,            /* server wants the client's host */
     PSRP_EVENT_USER_EVENT,           /* `text` holds the source identifier */
+    PSRP_EVENT_RUNSPACE_AVAILABILITY,/* reply to a set/get runspaces request */
+    PSRP_EVENT_POOL_INIT_DATA,       /* reply to CONNECT_RUNSPACEPOOL */
     PSRP_EVENT_UNKNOWN_MESSAGE       /* surfaced, not silently dropped */
 } psrp_event_kind_t;
 
@@ -55,7 +57,17 @@ typedef struct psrp_event {
     psrp_event_kind_t kind;
     uint32_t message_type;       /* the raw PSRP message type */
     psrp_guid_t pipeline_id;     /* zero for pool-level messages */
-    int32_t state;               /* pool or pipeline state, else -1 */
+    int32_t state;               /* pool or pipeline state, else -1.
+                                  * For a host call, the method id; for
+                                  * RUNSPACE_AVAILABILITY, 1 when the call
+                                  * identifier was one we were waiting for;
+                                  * for POOL_INIT_DATA, the minimum runspaces.
+                                  * For SESSION_CAPABILITY, the pool state the
+                                  * negotiation produced. */
+    int64_t call_id;             /* host call ci, or the ci being answered */
+    int64_t count;               /* RUNSPACE_AVAILABILITY count or POOL_INIT_
+                                  * DATA maximum; see has_count */
+    bool has_count;              /* false when the reply was a plain Boolean */
     char *text;                  /* owned; record message or error text */
     psrp_value_t value;          /* owned; PIPELINE_OUTPUT payload */
 } psrp_event_t;
@@ -104,6 +116,34 @@ psrp_result_t psrp_session_end_input(psrp_session_t *s,
 
 /* Moves any queued outgoing bytes into `out`, emptying the queue. Returns
  * PSRP_ERR_NOT_FOUND when there is nothing to send. */
+/* RunspacePool operations (3.1.5.4.6, .7, .11, .31). Each requires the pool
+ * to be Opened, mints a unique call identifier, records it in the pool's CI
+ * table (3.1.1.2.5) and queues the message for the next take_output. The
+ * server answers with PSRP_EVENT_RUNSPACE_AVAILABILITY quoting the same
+ * identifier, which removes it from the table. */
+psrp_result_t psrp_session_set_max_runspaces(psrp_session_t *s, int32_t count,
+                                             int64_t *ci_out);
+psrp_result_t psrp_session_set_min_runspaces(psrp_session_t *s, int32_t count,
+                                             int64_t *ci_out);
+psrp_result_t psrp_session_get_available_runspaces(psrp_session_t *s,
+                                                   int64_t *ci_out);
+psrp_result_t psrp_session_reset_runspace_state(psrp_session_t *s,
+                                                int64_t *ci_out);
+
+/* Call identifiers still awaiting a RUNSPACE_AVAILABILITY. */
+size_t psrp_session_pending_call_count(const psrp_session_t *s);
+
+/* Pipelines in the pool's pipeline table (3.1.1.2.6). A pipeline is entered
+ * when created and removed once it reports Completed, Failed or Stopped, so
+ * this counts what is still in flight. */
+size_t psrp_session_pipeline_count(const psrp_session_t *s);
+
+/* State of a tracked pipeline. Returns PSRP_ERR_NOT_FOUND once the pipeline
+ * has finished and left the table. */
+psrp_result_t psrp_session_pipeline_state(const psrp_session_t *s,
+                                          const psrp_guid_t *id,
+                                          int32_t *out);
+
 psrp_result_t psrp_session_take_output(psrp_session_t *s, psrp_buffer_t *out);
 
 /* Answers a host call. `pipeline_id` selects PIPELINE_HOST_RESPONSE when

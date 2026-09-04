@@ -1,6 +1,7 @@
 /* Client-side PSRP state machine ([MS-PSRP] 3.1). Sans-IO: bytes in, bytes
  * and events out. */
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -15,6 +16,26 @@ typedef struct event_node {
     struct event_node *next;
     psrp_event_t ev;
 } event_node_t;
+
+/* 3.1.1.2.5 RunspacePool Information CI Table. Every SET_MAX_RUNSPACES,
+ * SET_MIN_RUNSPACES, GET_AVAILABLE_RUNSPACES and RESET_RUNSPACE_STATE carries
+ * a unique call identifier that the matching RUNSPACE_AVAILABILITY quotes
+ * back. Keeping the table is what lets a caller tell which reply belongs to
+ * which request when several are outstanding. */
+typedef struct ci_node {
+    struct ci_node *next;
+    int64_t ci;
+    uint32_t message_type;
+} ci_node_t;
+
+/* 3.1.1.2.6 Pipeline Table (and 3.1.1.1.2, which is the same set keyed
+ * globally). A pipeline is entered when created and removed once it reaches
+ * Completed, Failed or Stopped. */
+typedef struct pipe_node {
+    struct pipe_node *next;
+    psrp_guid_t id;
+    int32_t state;
+} pipe_node_t;
 
 struct psrp_session {
     psrp_guid_t pool_id;
@@ -32,6 +53,11 @@ struct psrp_session {
 
     /* 2.2.4: ObjectId must be greater than zero and unique within the pool. */
     uint64_t next_object_id;
+
+    ci_node_t *ci_head;
+    int64_t next_ci;
+
+    pipe_node_t *pipe_head;
 
     event_node_t *ev_head;
     event_node_t *ev_tail;
@@ -84,6 +110,7 @@ psrp_session_t *psrp_session_new(void)
     psrp_buffer_init(&s->outgoing_pr);
     s->pool_state = PSRP_RUNSPACE_BEFORE_OPEN;
     s->next_object_id = 1;      /* ObjectId 0 is illegal */
+    s->next_ci = 1;
     psrp_session_capability_defaults(&s->local_capability);
     psrp_init_runspacepool_defaults(&s->init);
     return s;
@@ -100,10 +127,127 @@ void psrp_session_free(psrp_session_t *s)
         free(n);
         n = next;
     }
+    while (s->ci_head) {
+        ci_node_t *next = s->ci_head->next;
+        free(s->ci_head);
+        s->ci_head = next;
+    }
+    while (s->pipe_head) {
+        pipe_node_t *next = s->pipe_head->next;
+        free(s->pipe_head);
+        s->pipe_head = next;
+    }
     psrp_defrag_free(s->defrag);
     psrp_buffer_free(&s->outgoing);
     psrp_buffer_free(&s->outgoing_pr);
     free(s);
+}
+
+/* ------------------------------------------------- CI table (3.1.1.2.5) -- */
+
+static psrp_result_t ci_add(psrp_session_t *s, uint32_t type, int64_t *ci_out)
+{
+    ci_node_t *n = (ci_node_t *)calloc(1, sizeof *n);
+    if (!n) return PSRP_ERR_NOMEM;
+    n->ci = s->next_ci++;
+    n->message_type = type;
+    n->next = s->ci_head;
+    s->ci_head = n;
+    if (ci_out) *ci_out = n->ci;
+    return PSRP_OK;
+}
+
+/* Removes a call identifier, reporting whether it was actually outstanding.
+ * A reply quoting an unknown one is worth surfacing rather than swallowing:
+ * it means the client and server disagree about what is in flight. */
+static bool ci_remove(psrp_session_t *s, int64_t ci)
+{
+    ci_node_t **link = &s->ci_head;
+    while (*link) {
+        if ((*link)->ci == ci) {
+            ci_node_t *dead = *link;
+            *link = dead->next;
+            free(dead);
+            return true;
+        }
+        link = &(*link)->next;
+    }
+    return false;
+}
+
+size_t psrp_session_pending_call_count(const psrp_session_t *s)
+{
+    size_t n = 0;
+    const ci_node_t *p;
+    if (!s) return 0;
+    for (p = s->ci_head; p; p = p->next) n++;
+    return n;
+}
+
+/* ------------------------------------------- pipeline table (3.1.1.2.6) -- */
+
+static pipe_node_t *pipe_find(psrp_session_t *s, const psrp_guid_t *id)
+{
+    pipe_node_t *p;
+    for (p = s->pipe_head; p; p = p->next)
+        if (memcmp(&p->id, id, sizeof *id) == 0) return p;
+    return NULL;
+}
+
+static psrp_result_t pipe_add(psrp_session_t *s, const psrp_guid_t *id)
+{
+    pipe_node_t *n = (pipe_node_t *)calloc(1, sizeof *n);
+    if (!n) return PSRP_ERR_NOMEM;
+    n->id = *id;
+    /* 3.1.5.4.10: the client initialises the state to Running as it sends. */
+    n->state = PSRP_INVOCATION_RUNNING;
+    n->next = s->pipe_head;
+    s->pipe_head = n;
+    return PSRP_OK;
+}
+
+static void pipe_remove(psrp_session_t *s, const psrp_guid_t *id)
+{
+    pipe_node_t **link = &s->pipe_head;
+    while (*link) {
+        if (memcmp(&(*link)->id, id, sizeof *id) == 0) {
+            pipe_node_t *dead = *link;
+            *link = dead->next;
+            free(dead);
+            return;
+        }
+        link = &(*link)->next;
+    }
+}
+
+static bool pipeline_is_running(psrp_session_t *s, const psrp_guid_t *id)
+{
+    const pipe_node_t *p = pipe_find(s, id);
+    return p && p->state == PSRP_INVOCATION_RUNNING;
+}
+
+size_t psrp_session_pipeline_count(const psrp_session_t *s)
+{
+    size_t n = 0;
+    const pipe_node_t *p;
+    if (!s) return 0;
+    for (p = s->pipe_head; p; p = p->next) n++;
+    return n;
+}
+
+psrp_result_t psrp_session_pipeline_state(const psrp_session_t *s,
+                                          const psrp_guid_t *id,
+                                          int32_t *out)
+{
+    const pipe_node_t *p;
+    if (!s || !id || !out) return PSRP_ERR_INVALID_ARG;
+    for (p = s->pipe_head; p; p = p->next) {
+        if (memcmp(&p->id, id, sizeof *id) == 0) {
+            *out = p->state;
+            return PSRP_OK;
+        }
+    }
+    return PSRP_ERR_NOT_FOUND;
 }
 
 psrp_result_t psrp_session_configure(psrp_session_t *s,
@@ -197,6 +341,8 @@ psrp_result_t psrp_session_pipeline_payload(psrp_session_t *s,
     psrp_result_t rc;
 
     if (!s || !out || !commands || count == 0) return PSRP_ERR_INVALID_ARG;
+    /* 3.1.5.4.10: CREATE_PIPELINE is sent when the pool is Opened. */
+    if (s->pool_state != PSRP_RUNSPACE_OPENED) return PSRP_ERR_STATE;
 
     rc = psrp_guid_generate(&pid);
     if (rc != PSRP_OK) return rc;
@@ -207,9 +353,12 @@ psrp_result_t psrp_session_pipeline_payload(psrp_session_t *s,
     if (rc == PSRP_OK)
         rc = emit(s, out, PSRP_MSG_CREATE_PIPELINE, &pid, body.data, body.len);
     psrp_buffer_free(&body);
+    if (rc != PSRP_OK) return rc;
 
-    if (rc == PSRP_OK && pipeline_id_out) *pipeline_id_out = pid;
-    return rc;
+    rc = pipe_add(s, &pid);
+    if (rc != PSRP_OK) return rc;
+    if (pipeline_id_out) *pipeline_id_out = pid;
+    return PSRP_OK;
 }
 
 psrp_result_t psrp_session_send_input(psrp_session_t *s,
@@ -220,6 +369,9 @@ psrp_result_t psrp_session_send_input(psrp_session_t *s,
     psrp_result_t rc;
 
     if (!s || !pipeline_id || !value) return PSRP_ERR_INVALID_ARG;
+    /* 3.1.5.4.17: the pipeline must be Running. Once it has completed it is
+     * gone from the table, so a not-found lookup is the same refusal. */
+    if (!pipeline_is_running(s, pipeline_id)) return PSRP_ERR_STATE;
     psrp_buffer_init(&body);
     rc = psrp_build_pipeline_input(value, &body);
     if (rc == PSRP_OK)
@@ -233,9 +385,82 @@ psrp_result_t psrp_session_end_input(psrp_session_t *s,
                                      const psrp_guid_t *pipeline_id)
 {
     if (!s || !pipeline_id) return PSRP_ERR_INVALID_ARG;
+    /* 3.1.5.4.18: only while the pipeline is Running. */
+    if (!pipeline_is_running(s, pipeline_id)) return PSRP_ERR_STATE;
     /* 2.2.2.18: the Data field is empty. */
     return emit(s, &s->outgoing, PSRP_MSG_END_OF_PIPELINE_INPUT, pipeline_id,
                 NULL, 0);
+}
+
+/* ------------------------------------------- RunspacePool operations ---- */
+/*
+ * 3.1.5.4.6, .7, .11 and .31 all share a shape: the pool must be Opened, the
+ * client mints a unique call identifier and records it, and the server answers
+ * with a RUNSPACE_AVAILABILITY quoting it back.
+ */
+typedef psrp_result_t (*pool_build_fn)(int64_t ci, int32_t arg,
+                                       psrp_buffer_t *out);
+
+static psrp_result_t pool_request(psrp_session_t *s, uint32_t type,
+                                  pool_build_fn build, int32_t arg,
+                                  int64_t *ci_out)
+{
+    psrp_buffer_t body;
+    int64_t ci = 0;
+    psrp_result_t rc;
+
+    if (!s) return PSRP_ERR_INVALID_ARG;
+    if (s->pool_state != PSRP_RUNSPACE_OPENED) return PSRP_ERR_STATE;
+
+    rc = ci_add(s, type, &ci);
+    if (rc != PSRP_OK) return rc;
+
+    psrp_buffer_init(&body);
+    rc = build(ci, arg, &body);
+    if (rc == PSRP_OK)
+        rc = emit(s, &s->outgoing, type, NULL, body.data, body.len);
+    psrp_buffer_free(&body);
+
+    /* Leaving a call identifier in the table for a message that never went
+     * out would make the pending count lie. */
+    if (rc != PSRP_OK) { ci_remove(s, ci); return rc; }
+    if (ci_out) *ci_out = ci;
+    return PSRP_OK;
+}
+
+static psrp_result_t build_max(int64_t ci, int32_t n, psrp_buffer_t *out)
+{ return psrp_build_set_max_runspaces(ci, n, out); }
+static psrp_result_t build_min(int64_t ci, int32_t n, psrp_buffer_t *out)
+{ return psrp_build_set_min_runspaces(ci, n, out); }
+static psrp_result_t build_available(int64_t ci, int32_t n, psrp_buffer_t *out)
+{ (void)n; return psrp_build_get_available_runspaces(ci, out); }
+static psrp_result_t build_reset(int64_t ci, int32_t n, psrp_buffer_t *out)
+{ (void)n; return psrp_build_reset_runspace_state(ci, out); }
+
+psrp_result_t psrp_session_set_max_runspaces(psrp_session_t *s, int32_t count,
+                                             int64_t *ci_out)
+{
+    return pool_request(s, PSRP_MSG_SET_MAX_RUNSPACES, build_max, count, ci_out);
+}
+
+psrp_result_t psrp_session_set_min_runspaces(psrp_session_t *s, int32_t count,
+                                             int64_t *ci_out)
+{
+    return pool_request(s, PSRP_MSG_SET_MIN_RUNSPACES, build_min, count, ci_out);
+}
+
+psrp_result_t psrp_session_get_available_runspaces(psrp_session_t *s,
+                                                   int64_t *ci_out)
+{
+    return pool_request(s, PSRP_MSG_GET_AVAILABLE_RUNSPACES, build_available, 0,
+                        ci_out);
+}
+
+psrp_result_t psrp_session_reset_runspace_state(psrp_session_t *s,
+                                                int64_t *ci_out)
+{
+    return pool_request(s, PSRP_MSG_RESET_RUNSPACE_STATE, build_reset, 0,
+                        ci_out);
 }
 
 psrp_result_t psrp_session_take_output(psrp_session_t *s, psrp_buffer_t *out)
@@ -305,6 +530,37 @@ static char *dup_cstr(const char *s)
 }
 
 /* Maps a record-carrying message type onto its event kind. */
+/* 3.1.5.4.1.2 negotiation check.
+ *
+ * The spec's table says protocolversion must be 2.1 or 2.2, PSVersion must be
+ * 2.0 and SerializationVersion must be 1.1.0.1. Two of those three no longer
+ * describe any server anyone runs. Windows PowerShell 5.1 announces PSVersion
+ * 5.1, PowerShell 7 announces 7.x and protocolversion 2.3. Enforcing the
+ * table literally would mark every modern server Broken and leave the library
+ * able to talk only to PowerShell 2.0.
+ *
+ * So the rule here follows the intent instead: protocolversion must be major
+ * 2 with minor 1 or greater, which is the "2.1 or 2.2" floor extended the way
+ * the version numbering plainly intends. SerializationVersion is still checked
+ * against 1.1.0.1, because that one really has not moved and a different value
+ * would mean the CLIXML on the wire is not what this library writes. PSVersion
+ * is not checked at all: it reports the server's PowerShell build, and no
+ * value of it changes how the protocol behaves.
+ */
+static bool capability_acceptable(const psrp_session_capability_t *c)
+{
+    unsigned major = 0, minor = 0;
+
+    if (sscanf(c->protocol_version, "%u.%u", &major, &minor) != 2)
+        return false;
+    if (major != 2 || minor < 1) return false;
+
+    if (c->serialization_version[0] &&
+        strcmp(c->serialization_version, "1.1.0.1") != 0)
+        return false;
+    return true;
+}
+
 static psrp_event_kind_t record_kind(uint32_t type)
 {
     switch (type) {
@@ -332,7 +588,17 @@ static psrp_result_t dispatch(psrp_session_t *s, const psrp_message_t *m)
         rc = psrp_parse_session_capability(xml, xml_len, &s->server_capability);
         if (rc != PSRP_OK) return rc;
         s->have_server_capability = true;
+        /* 3.1.5.4.1.2: validate the announced versions and move the pool to
+         * NegotiationSucceeded, or to Broken when they do not match. The
+         * failure is reported as a state change rather than an error return,
+         * because a broken negotiation is a protocol outcome the caller has
+         * to see, not a decoding fault. */
+        if (capability_acceptable(&s->server_capability))
+            s->pool_state = PSRP_RUNSPACE_NEGOTIATION_SUCCEEDED;
+        else
+            s->pool_state = PSRP_RUNSPACE_BROKEN;
         event_init(&e, PSRP_EVENT_SESSION_CAPABILITY, m->type, NULL);
+        e.state = s->pool_state;
         e.text = dup_cstr(s->server_capability.protocol_version);
         return event_push(s, &e);
 
@@ -340,6 +606,13 @@ static psrp_result_t dispatch(psrp_session_t *s, const psrp_message_t *m)
         psrp_runspacepool_state_msg_t st;
         rc = psrp_parse_runspacepool_state(xml, xml_len, &st);
         if (rc != PSRP_OK) return rc;
+        /* 3.1.5.4.9: once Closed or Broken, this message is ignored. Acting
+         * on it would let a late message resurrect a dead pool. */
+        if (s->pool_state == PSRP_RUNSPACE_CLOSED ||
+            s->pool_state == PSRP_RUNSPACE_BROKEN) {
+            psrp_runspacepool_state_msg_free(&st);
+            return PSRP_OK;
+        }
         s->pool_state = st.state;
         event_init(&e, PSRP_EVENT_POOL_STATE, m->type, NULL);
         e.state = st.state;
@@ -351,8 +624,22 @@ static psrp_result_t dispatch(psrp_session_t *s, const psrp_message_t *m)
 
     case PSRP_MSG_PIPELINE_STATE: {
         psrp_pipeline_state_msg_t st;
+        pipe_node_t *p;
         rc = psrp_parse_pipeline_state(xml, xml_len, &st);
         if (rc != PSRP_OK) return rc;
+        /* 3.1.5.4.21: a PIPELINE_STATE aimed at the pool rather than at a
+         * pipeline is ignored, as is one for a pipeline that is not Running. */
+        p = psrp_guid_is_empty(&m->pid) ? NULL : pipe_find(s, &m->pid);
+        if (!p || p->state != PSRP_INVOCATION_RUNNING) {
+            psrp_pipeline_state_msg_free(&st);
+            return PSRP_OK;
+        }
+        p->state = st.state;
+        /* A finished pipeline leaves both tables. */
+        if (st.state == PSRP_INVOCATION_COMPLETED ||
+            st.state == PSRP_INVOCATION_FAILED ||
+            st.state == PSRP_INVOCATION_STOPPED)
+            pipe_remove(s, &m->pid);
         event_init(&e, PSRP_EVENT_PIPELINE_STATE, m->type, &m->pid);
         e.state = st.state;
         e.text = st.error_text;
@@ -415,6 +702,32 @@ static psrp_result_t dispatch(psrp_session_t *s, const psrp_message_t *m)
         return event_push(s, &e);
     }
 
+    case PSRP_MSG_RUNSPACE_AVAILABILITY: {
+        psrp_runspace_availability_t ra;
+        rc = psrp_parse_runspace_availability(xml, xml_len, &ra);
+        if (rc != PSRP_OK) return rc;
+        event_init(&e, PSRP_EVENT_RUNSPACE_AVAILABILITY, m->type, NULL);
+        /* 3.1.5.4.8: the call identifier leaves the CI table. `state` says
+         * whether it was one we were actually waiting for; a reply we never
+         * asked for means the two sides disagree about what is in flight. */
+        e.state = ci_remove(s, ra.ci) ? 1 : 0;
+        e.call_id = ra.ci;
+        e.count = ra.is_count ? ra.count : (ra.accepted ? 1 : 0);
+        e.has_count = ra.is_count;
+        return event_push(s, &e);
+    }
+
+    case PSRP_MSG_RUNSPACEPOOL_INIT_DATA: {
+        psrp_runspacepool_init_data_t d;
+        rc = psrp_parse_runspacepool_init_data(xml, xml_len, &d);
+        if (rc != PSRP_OK) return rc;
+        event_init(&e, PSRP_EVENT_POOL_INIT_DATA, m->type, NULL);
+        e.state = d.min_runspaces;
+        e.count = d.max_runspaces;
+        e.has_count = true;
+        return event_push(s, &e);
+    }
+
     case PSRP_MSG_USER_EVENT: {
         psrp_user_event_t ue;
         rc = psrp_parse_user_event(xml, xml_len, &ue);
@@ -434,10 +747,19 @@ static psrp_result_t dispatch(psrp_session_t *s, const psrp_message_t *m)
         return event_push(s, &e);
 
     case PSRP_MSG_RUNSPACEPOOL_HOST_CALL:
-    case PSRP_MSG_PIPELINE_HOST_CALL:
+    case PSRP_MSG_PIPELINE_HOST_CALL: {
+        psrp_host_call_t hc;
         event_init(&e, PSRP_EVENT_HOST_CALL, m->type, &m->pid);
         (void)psrp_parse_pipeline_output(xml, xml_len, &e.value);
+        /* 3.1.5.4.16 and .28 require the response to quote the same ci, so
+         * surface it rather than making the caller dig it out again. */
+        if (psrp_parse_host_call(xml, xml_len, &hc) == PSRP_OK) {
+            e.call_id = hc.call_id;
+            e.state = hc.method_id;
+            psrp_host_call_free(&hc);
+        }
         return event_push(s, &e);
+    }
 
     default:
         /* Surfaced rather than dropped, so a caller can log or ignore
