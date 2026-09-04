@@ -46,8 +46,8 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 2.2.2.12 | USER_EVENT Message | todo | todo | |
 | 2.2.2.13 | APPLICATION_PRIVATE_DATA Message | done | done | surfaced as an opaque object; PSRP does not interpret it |
 | 2.2.2.14 | GET_COMMAND_METADATA Message | todo | todo | |
-| 2.2.2.15 | RUNSPACEPOOL_HOST_CALL Message | todo | todo | |
-| 2.2.2.16 | RUNSPACEPOOL_HOST_RESPONSE Message | todo | todo | |
+| 2.2.2.15 | RUNSPACEPOOL_HOST_CALL Message | done | done | parse to ci/mi/mp |
+| 2.2.2.16 | RUNSPACEPOOL_HOST_RESPONSE Message | done | done | build with mr or me |
 | 2.2.2.17 | PIPELINE_INPUT Message | done | done | serialize any value |
 | 2.2.2.18 | END_OF_PIPELINE_INPUT Message | done | done | empty Data field, per spec |
 | 2.2.2.19 | PIPELINE_OUTPUT Message | done | done | deserialize any value + text rendering |
@@ -58,8 +58,8 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 2.2.2.24 | WARNING_RECORD Message | done | done | informational record parser |
 | 2.2.2.25 | PROGRESS_RECORD Message | done | done | parse to typed fields |
 | 2.2.2.26 | INFORMATION_RECORD Message | done | done | parse; properties arrive as adapted <Props> |
-| 2.2.2.27 | PIPELINE_HOST_CALL Message | todo | todo | |
-| 2.2.2.28 | PIPELINE_HOST_RESPONSE Message | todo | todo | |
+| 2.2.2.27 | PIPELINE_HOST_CALL Message | done | done | parse to ci/mi/mp |
+| 2.2.2.28 | PIPELINE_HOST_RESPONSE Message | done | done | build with mr or me |
 | 2.2.2.29 | CONNECT_RUNSPACEPOOL Message | done | done | build; both bounds optional, empty form supported |
 | 2.2.2.30 | RUNSPACEPOOL_INIT_DATA Message | done | done | parse; absent bounds reported as -1 |
 | 2.2.2.31 | RESET_RUNSPACE_STATE Message | done | done | build |
@@ -89,7 +89,7 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 2.2.3.15 | ErrorRecord | done | done | message, error id, category fields |
 | 2.2.3.15.1 | InvocationInfo-specific Extended Properties | todo | todo | |
 | 2.2.3.16 | InformationalRecord (DebugRecord, WarningRecord or VerboseRecord) | done | done | message + invocation-info flag |
-| 2.2.3.17 | Host Method Identifier | todo | todo | |
+| 2.2.3.17 | Host Method Identifier | done | done | all 56 methods, with the returns-a-value rule |
 | 2.2.3.18 | Primitive Dictionary | todo | todo | |
 | 2.2.3.19 | CommandType | todo | todo | |
 | 2.2.3.20 | Wildcard | todo | todo | |
@@ -168,7 +168,7 @@ This file is the definition of "full spec coverage". Update it in the same commi
 
 | Section | Title | Impl | Tests | Notes |
 |---|---|---|---|---|
-| 2.2.6 | Encoding Host Parameters in Host Method Calls | todo | todo | |
+| 2.2.6 | Encoding Host Parameters in Host Method Calls | wip | wip | mp surfaced as a parsed object; typed per-method decoding deferred (TODO PSRP-09) |
 | 2.2.6.1 | Encoding Individual Parameters | todo | todo | |
 | 2.2.6.1.1 | Any Serializable Type | todo | todo | |
 | 2.2.6.1.2 | CultureInfo | todo | todo | |
@@ -209,7 +209,7 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 3.1.4.1 | Creating a RunspacePool | done | done | open payload: SESSION_CAPABILITY + INIT_RUNSPACEPOOL |
 | 3.1.4.2 | Closing a RunspacePool | todo | todo | |
 | 3.1.4.3 | Executing a Pipeline | done | done | CREATE_PIPELINE payload + pipeline id |
-| 3.1.4.4 | Stopping a Pipeline | todo | todo | |
+| 3.1.4.4 | Stopping a Pipeline | done | done | pipeline state tracked; signal handled by the transport |
 | 3.1.4.5 | Getting Command Metadata | todo | todo | |
 | 3.1.4.6 | Setting the Minimum or Maximum Runspaces in a RunspacePool | done | done | builders + availability response |
 | 3.1.4.7 | Getting the Number of Available Runspaces in a RunspacePool | done | done | builder + availability response |

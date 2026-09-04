@@ -50,6 +50,7 @@ add_library(psrp STATIC
   src/state/session.c
   src/proto/messages_pool.c
   src/transport/transport_wsman.c
+  src/state/host.c
 )
 add_library(psrp::psrp ALIAS psrp)
 

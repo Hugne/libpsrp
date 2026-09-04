@@ -466,8 +466,10 @@ psrp_result_t psrp_transport_run_command(psrp_transport_t *t,
     return rc;
 }
 
-psrp_result_t psrp_transport_send(psrp_transport_t *t, const void *data,
-                                  size_t len)
+/* Shared by both streams; PSRP uses "stdin" for data and "pr" for host
+ * responses (3.1.5.3.5). */
+static psrp_result_t send_on_stream(psrp_transport_t *t, PCWSTR stream,
+                                    const void *data, size_t len)
 {
     async_op_t op;
     WSMAN_SHELL_ASYNC async;
@@ -486,7 +488,7 @@ psrp_result_t psrp_transport_send(psrp_transport_t *t, const void *data,
     op_init(&op);
     async.operationContext = &op;
     async.completionFunction = generic_completion;
-    WSManSendShellInput(t->shell, t->command, 0, L"stdin", &payload, FALSE,
+    WSManSendShellInput(t->shell, t->command, 0, stream, &payload, FALSE,
                         &async, &send_op);
     if (WaitForSingleObject(op.done, t->timeout_ms) != WAIT_OBJECT_0) {
         set_error(t, "WSManSendShellInput", 0, L"timed out");
@@ -498,6 +500,18 @@ psrp_result_t psrp_transport_send(psrp_transport_t *t, const void *data,
     if (send_op) WSManCloseOperation(send_op, 0);
     op_destroy(&op);
     return rc;
+}
+
+psrp_result_t psrp_transport_send(psrp_transport_t *t, const void *data,
+                                  size_t len)
+{
+    return send_on_stream(t, L"stdin", data, len);
+}
+
+psrp_result_t psrp_transport_send_priority(psrp_transport_t *t,
+                                           const void *data, size_t len)
+{
+    return send_on_stream(t, L"pr", data, len);
 }
 
 psrp_result_t psrp_transport_receive(psrp_transport_t *t, psrp_buffer_t *out,

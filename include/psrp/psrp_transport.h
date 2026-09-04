@@ -60,6 +60,11 @@ psrp_result_t psrp_transport_run_command(psrp_transport_t *t,
 psrp_result_t psrp_transport_send(psrp_transport_t *t,
                                   const void *data, size_t len);
 
+/* Sends bytes on the "pr" stream, which 3.1.5.3.5 reserves for host
+ * responses. Pair it with psrp_session_take_priority_output. */
+psrp_result_t psrp_transport_send_priority(psrp_transport_t *t,
+                                           const void *data, size_t len);
+
 /* Appends whatever has arrived on "stdout", waiting up to `timeout_ms` for at
  * least one byte. Returns PSRP_ERR_TRUNCATED if nothing arrived in time,
  * which is a normal "keep waiting" answer rather than a failure. */

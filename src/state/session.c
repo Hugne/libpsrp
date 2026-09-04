@@ -8,6 +8,7 @@
 #include "psrp/psrp_message.h"
 #include "psrp/psrp_fragment.h"
 #include "psrp/psrp_clixml.h"
+#include "psrp/psrp_host.h"
 
 typedef struct event_node {
     struct event_node *next;
@@ -26,6 +27,7 @@ struct psrp_session {
 
     psrp_defrag_t *defrag;
     psrp_buffer_t outgoing;
+    psrp_buffer_t outgoing_pr;   /* host responses; the WSMan "pr" stream */
 
     /* 2.2.4: ObjectId must be greater than zero and unique within the pool. */
     uint64_t next_object_id;
@@ -78,6 +80,7 @@ psrp_session_t *psrp_session_new(void)
     if (!s->defrag) { free(s); return NULL; }
 
     psrp_buffer_init(&s->outgoing);
+    psrp_buffer_init(&s->outgoing_pr);
     s->pool_state = PSRP_RUNSPACE_BEFORE_OPEN;
     s->next_object_id = 1;      /* ObjectId 0 is illegal */
     psrp_session_capability_defaults(&s->local_capability);
@@ -98,6 +101,7 @@ void psrp_session_free(psrp_session_t *s)
     }
     psrp_defrag_free(s->defrag);
     psrp_buffer_free(&s->outgoing);
+    psrp_buffer_free(&s->outgoing_pr);
     free(s);
 }
 
@@ -240,6 +244,48 @@ psrp_result_t psrp_session_take_output(psrp_session_t *s, psrp_buffer_t *out)
     if (s->outgoing.len == 0) return PSRP_ERR_NOT_FOUND;
     rc = psrp_buffer_append(out, s->outgoing.data, s->outgoing.len);
     if (rc == PSRP_OK) psrp_buffer_reset(&s->outgoing);
+    return rc;
+}
+
+psrp_result_t psrp_session_take_priority_output(psrp_session_t *s,
+                                                psrp_buffer_t *out)
+{
+    psrp_result_t rc;
+    if (!s || !out) return PSRP_ERR_INVALID_ARG;
+    if (s->outgoing_pr.len == 0) return PSRP_ERR_NOT_FOUND;
+    rc = psrp_buffer_append(out, s->outgoing_pr.data, s->outgoing_pr.len);
+    if (rc == PSRP_OK) psrp_buffer_reset(&s->outgoing_pr);
+    return rc;
+}
+
+psrp_result_t psrp_session_respond_to_host_call(psrp_session_t *s,
+                                                const psrp_guid_t *pipeline_id,
+                                                int64_t call_id,
+                                                int32_t method_id,
+                                                const psrp_value_t *return_value,
+                                                const char *error_message)
+{
+    psrp_buffer_t body;
+    psrp_result_t rc;
+    uint32_t type;
+
+    if (!s) return PSRP_ERR_INVALID_ARG;
+    /* Responding to a method that returns nothing is a protocol violation,
+     * so refuse rather than confuse the server. */
+    if (!psrp_host_method_returns_value(method_id)) return PSRP_ERR_STATE;
+
+    psrp_buffer_init(&body);
+    if (return_value)
+        rc = psrp_build_host_response(call_id, method_id, return_value, &body);
+    else
+        rc = psrp_build_host_response_error(call_id, method_id, error_message,
+                                            &body);
+
+    type = pipeline_id ? PSRP_MSG_PIPELINE_HOST_RESPONSE
+                       : PSRP_MSG_RUNSPACEPOOL_HOST_RESPONSE;
+    if (rc == PSRP_OK)
+        rc = emit(s, &s->outgoing_pr, type, pipeline_id, body.data, body.len);
+    psrp_buffer_free(&body);
     return rc;
 }
 

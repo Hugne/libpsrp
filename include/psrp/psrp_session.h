@@ -105,6 +105,25 @@ psrp_result_t psrp_session_end_input(psrp_session_t *s,
  * PSRP_ERR_NOT_FOUND when there is nothing to send. */
 psrp_result_t psrp_session_take_output(psrp_session_t *s, psrp_buffer_t *out);
 
+/* Answers a host call. `pipeline_id` selects PIPELINE_HOST_RESPONSE when
+ * non-NULL and RUNSPACEPOOL_HOST_RESPONSE otherwise, matching the call that
+ * arrived. Pass `return_value` for a successful result, or NULL together with
+ * `error_message` to report that the host could not do it.
+ *
+ * Only call this for methods where psrp_host_method_returns_value() is true:
+ * the spec forbids responding to the others. */
+psrp_result_t psrp_session_respond_to_host_call(psrp_session_t *s,
+                                                const psrp_guid_t *pipeline_id,
+                                                int64_t call_id,
+                                                int32_t method_id,
+                                                const psrp_value_t *return_value,
+                                                const char *error_message);
+
+/* Host responses travel on the WSMan "pr" stream rather than "stdin"
+ * (3.1.5.3.5), so they are queued separately and drained with this. */
+psrp_result_t psrp_session_take_priority_output(psrp_session_t *s,
+                                                psrp_buffer_t *out);
+
 /* Feeds bytes received from the transport. Complete messages are decoded and
  * turned into events. */
 psrp_result_t psrp_session_receive(psrp_session_t *s, const void *data,
