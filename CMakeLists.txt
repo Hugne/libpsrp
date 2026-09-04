@@ -46,6 +46,8 @@ add_library(psrp STATIC
   src/proto/messages.c
   src/proto/messages_pipeline.c
   src/proto/records.c
+  src/platform/random_win.c
+  src/state/session.c
 )
 add_library(psrp::psrp ALIAS psrp)
 
@@ -57,7 +59,7 @@ target_link_libraries(psrp PRIVATE psrp_flags)
 
 # XmlLite is the XML backend (Microsoft standard; ships with Windows and is
 # present in both the Windows SDK and llvm-mingw, so nothing is vendored).
-target_link_libraries(psrp PUBLIC xmllite)
+target_link_libraries(psrp PUBLIC xmllite bcrypt)
 
 if(PSRP_BUILD_TESTS)
   enable_testing()

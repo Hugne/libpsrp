@@ -49,7 +49,7 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 2.2.2.15 | RUNSPACEPOOL_HOST_CALL Message | todo | todo | |
 | 2.2.2.16 | RUNSPACEPOOL_HOST_RESPONSE Message | todo | todo | |
 | 2.2.2.17 | PIPELINE_INPUT Message | done | done | serialize any value |
-| 2.2.2.18 | END_OF_PIPELINE_INPUT Message | todo | todo | |
+| 2.2.2.18 | END_OF_PIPELINE_INPUT Message | done | done | empty Data field, per spec |
 | 2.2.2.19 | PIPELINE_OUTPUT Message | done | done | deserialize any value + text rendering |
 | 2.2.2.20 | ERROR_RECORD Message | done | done | parse to typed fields |
 | 2.2.2.21 | PIPELINE_STATE Message | done | done | parse incl. optional ExceptionAsErrorRecord text |
@@ -183,32 +183,32 @@ This file is the definition of "full spec coverage". Update it in the same commi
 
 | Section | Title | Impl | Tests | Notes |
 |---|---|---|---|---|
-| 3.1 | Client Details | todo | todo | |
-| 3.1.1 | Abstract Data Model | todo | todo | |
+| 3.1 | Client Details | wip | wip | session state machine (sans-IO) done; host calls, key exchange, disconnect/reconnect pending |
+| 3.1.1 | Abstract Data Model | wip | wip | pool + pipeline data modelled; session key and CI tables pending |
 | 3.1.1.1 | Global Data | todo | todo | |
 | 3.1.1.1.1 | WSMV ShellID to RunspacePool Table | todo | todo | |
 | 3.1.1.1.2 | WSMV CommandId to Pipeline Table | todo | todo | |
 | 3.1.1.1.3 | Public Key Pair | todo | todo | |
-| 3.1.1.2 | RunspacePool Data | todo | todo | |
-| 3.1.1.2.1 | GUID | todo | todo | |
-| 3.1.1.2.2 | RunspacePool State | todo | todo | |
-| 3.1.1.2.3 | Defragmentation Data | todo | todo | |
+| 3.1.1.2 | RunspacePool Data | wip | wip | id/state/defrag done; session key + information tables pending |
+| 3.1.1.2.1 | GUID | done | done | pool id, random v4 from the platform CSPRNG |
+| 3.1.1.2.2 | RunspacePool State | done | done | tracked and exposed |
+| 3.1.1.2.3 | Defragmentation Data | done | done | per-session defragmenter |
 | 3.1.1.2.4 | WSMV Shell | todo | todo | |
 | 3.1.1.2.5 | RunspacePool Information CI Table | todo | todo | |
 | 3.1.1.2.6 | Pipeline Table | todo | todo | |
 | 3.1.1.2.7 | Session Key | todo | todo | |
 | 3.1.1.2.8 | SessionKeyTransferTimeoutms | todo | todo | |
-| 3.1.1.3 | Pipeline Data | todo | todo | |
-| 3.1.1.3.1 | GUID | todo | todo | |
-| 3.1.1.3.2 | Pipeline State | todo | todo | |
-| 3.1.1.3.3 | Defragmentation Data | todo | todo | |
+| 3.1.1.3 | Pipeline Data | wip | wip | id/state/defrag done; WSMV command handle is the transport's |
+| 3.1.1.3.1 | GUID | done | done | pipeline id allocated per pipeline |
+| 3.1.1.3.2 | Pipeline State | done | done | surfaced as an event |
+| 3.1.1.3.3 | Defragmentation Data | done | done | shared session defragmenter |
 | 3.1.1.3.4 | WSMV Command | todo | todo | |
 | 3.1.2 | Timers | todo | todo | |
-| 3.1.3 | Initialization | todo | todo | |
-| 3.1.4 | Higher-Layer Triggered Events | todo | todo | |
-| 3.1.4.1 | Creating a RunspacePool | todo | todo | |
+| 3.1.3 | Initialization | done | done | session construction; pool id generated |
+| 3.1.4 | Higher-Layer Triggered Events | wip | wip | create pool + execute pipeline done; the rest pending |
+| 3.1.4.1 | Creating a RunspacePool | done | done | open payload: SESSION_CAPABILITY + INIT_RUNSPACEPOOL |
 | 3.1.4.2 | Closing a RunspacePool | todo | todo | |
-| 3.1.4.3 | Executing a Pipeline | todo | todo | |
+| 3.1.4.3 | Executing a Pipeline | done | done | CREATE_PIPELINE payload + pipeline id |
 | 3.1.4.4 | Stopping a Pipeline | todo | todo | |
 | 3.1.4.5 | Getting Command Metadata | todo | todo | |
 | 3.1.4.6 | Setting the Minimum or Maximum Runspaces in a RunspacePool | todo | todo | |
@@ -218,10 +218,10 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 3.1.4.10 | Connecting to a RunspacePool | todo | todo | |
 | 3.1.4.10.2 | Connecting to a RunspacePool from a Previous Client Session | todo | todo | |
 | 3.1.4.10.3 | Connecting to a RunspacePool from a New Client Session | todo | todo | |
-| 3.1.5 | Message Processing Events and Sequencing Rules | todo | todo | |
+| 3.1.5 | Message Processing Events and Sequencing Rules | wip | wip | send/receive rules done; sequencing details pending |
 | 3.1.5.1 | General Rules | todo | todo | |
-| 3.1.5.1.1 | Rules for Sending Data | todo | todo | |
-| 3.1.5.1.2 | Rules for Receiving Data | todo | todo | |
+| 3.1.5.1.1 | Rules for Sending Data | done | done | message framing + fragmentation on send |
+| 3.1.5.1.2 | Rules for Receiving Data | done | done | defragment, decode, dispatch to events |
 | 3.1.5.2 | Sequencing Rules | todo | todo | |
 | 3.1.5.3 | Rules for Processing WS-MAN Messages | todo | todo | |
 | 3.1.5.3.1 | Rules for the wxf:Create Message | todo | todo | |

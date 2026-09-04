@@ -41,6 +41,12 @@ psrp_result_t psrp_guid_parse(const char *str, psrp_guid_t *out);
  * PSRP_GUID_BUF_SIZE bytes. */
 psrp_result_t psrp_guid_format(const psrp_guid_t *g, char *out, size_t out_size);
 
+/* Fills `out` with a random (RFC 4122 version 4) GUID from the platform's
+ * cryptographic RNG. Runspace pool and pipeline ids must be unique, so this
+ * must not fall back to a predictable source; it returns PSRP_ERR_INTERNAL if
+ * the platform RNG is unavailable. */
+psrp_result_t psrp_guid_generate(psrp_guid_t *out);
+
 /* Convert to/from the little-endian field layout .NET's Guid uses on the wire
  * (first three fields byte-swapped, last eight bytes as-is). */
 void psrp_guid_to_wire(const psrp_guid_t *g, uint8_t out[16]);
