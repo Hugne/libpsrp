@@ -41,6 +41,8 @@ add_library(psrp STATIC
   src/proto/clixml_write.c
   src/proto/object.c
   src/proto/object_complex.c
+  src/xml/xml_xmllite.c
+  src/proto/clixml_read.c
 )
 add_library(psrp::psrp ALIAS psrp)
 
@@ -49,6 +51,10 @@ target_include_directories(psrp
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 target_link_libraries(psrp PRIVATE psrp_flags)
+
+# XmlLite is the XML backend (Microsoft standard; ships with Windows and is
+# present in both the Windows SDK and llvm-mingw, so nothing is vendored).
+target_link_libraries(psrp PUBLIC xmllite)
 
 if(PSRP_BUILD_TESTS)
   enable_testing()

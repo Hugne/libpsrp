@@ -109,50 +109,50 @@ This file is the definition of "full spec coverage". Update it in the same commi
 
 | Section | Title | Impl | Tests | Notes |
 |---|---|---|---|---|
-| 2.2.5 | Serialization | wip | wip | writer complete for all primitives + complex objects; reader next |
-| 2.2.5.1 | Serialization of Primitive Type Objects | wip | wip | serialize done; deserialize pending |
-| 2.2.5.1.1 | String | wip | wip | serialize done; deserialize pending |
-| 2.2.5.1.2 | Character | wip | wip | serialize done; deserialize pending |
-| 2.2.5.1.3 | Boolean | wip | wip | serialize done; deserialize pending |
-| 2.2.5.1.4 | Date/Time | wip | wip | serialize done; deserialize pending |
-| 2.2.5.1.5 | Duration | wip | wip | serialize done; deserialize pending |
-| 2.2.5.1.6 | Unsigned Byte | wip | wip | serialize done; deserialize pending |
-| 2.2.5.1.7 | Signed Byte | wip | wip | serialize done; deserialize pending |
-| 2.2.5.1.8 | Unsigned Short | wip | wip | serialize done; deserialize pending |
-| 2.2.5.1.9 | Signed Short | wip | wip | serialize done; deserialize pending |
-| 2.2.5.1.10 | Unsigned Int | wip | wip | serialize done; deserialize pending |
-| 2.2.5.1.11 | Signed Int | wip | wip | serialize done; deserialize pending |
-| 2.2.5.1.12 | Unsigned Long | wip | wip | serialize done; deserialize pending |
-| 2.2.5.1.13 | Signed Long | wip | wip | serialize done; deserialize pending |
-| 2.2.5.1.14 | Float | wip | wip | serialize done; deserialize pending |
-| 2.2.5.1.15 | Double | wip | wip | serialize done; deserialize pending |
-| 2.2.5.1.16 | Decimal | wip | wip | serialize done; deserialize pending |
-| 2.2.5.1.17 | Array of Bytes | wip | wip | serialize done; deserialize pending |
-| 2.2.5.1.18 | GUID | wip | wip | serialize done; deserialize pending |
-| 2.2.5.1.19 | URI | wip | wip | serialize done; deserialize pending |
-| 2.2.5.1.20 | Null Value | wip | wip | serialize done; deserialize pending |
-| 2.2.5.1.21 | Version | wip | wip | serialize done; deserialize pending |
-| 2.2.5.1.22 | XML Document | wip | wip | serialize done; deserialize pending |
-| 2.2.5.1.23 | ScriptBlock | wip | wip | serialize done; deserialize pending |
-| 2.2.5.1.24 | Secure String | wip | wip | serialize done; deserialize pending |
-| 2.2.5.1.25 | Progress Record | wip | wip | serialize done; deserialize pending |
-| 2.2.5.1.26 | Information Record | wip | wip | serialize done; deserialize pending |
-| 2.2.5.2 | Serialization of Complex Objects | wip | wip | serialize done; deserialize pending |
-| 2.2.5.2.1 | Referencing Earlier Objects | wip | wip | serialize done; deserialize pending |
-| 2.2.5.2.1.1 | RefId Attribute | wip | wip | serialize done; deserialize pending |
-| 2.2.5.2.1.2 | <Ref> Element | wip | wip | serialize done; deserialize pending |
-| 2.2.5.2.2 | <Obj> Element | wip | wip | serialize done; deserialize pending |
-| 2.2.5.2.3 | Type Names | wip | wip | serialize done; deserialize pending |
-| 2.2.5.2.4 | ToString | wip | wip | serialize done; deserialize pending |
-| 2.2.5.2.5 | Contents of Extended Primitive Objects | wip | wip | serialize done; deserialize pending |
-| 2.2.5.2.6 | Contents of Known Containers | wip | wip | serialize done; deserialize pending |
-| 2.2.5.2.6.1 | Stack | wip | wip | serialize done; deserialize pending |
-| 2.2.5.2.6.2 | Queue | wip | wip | serialize done; deserialize pending |
-| 2.2.5.2.6.3 | List | wip | wip | serialize done; deserialize pending |
-| 2.2.5.2.6.4 | Dictionaries | wip | wip | serialize done; deserialize pending |
-| 2.2.5.2.7 | Contents of Enums | wip | wip | serialize done; deserialize pending |
-| 2.2.5.2.8 | Adapted Properties | wip | wip | serialize done; deserialize pending |
-| 2.2.5.2.9 | Extended Properties | wip | wip | serialize done; deserialize pending |
+| 2.2.5 | Serialization | done | done | writer + reader, XmlLite backend, round-trip tested |
+| 2.2.5.1 | Serialization of Primitive Type Objects | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.1.1 | String | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.1.2 | Character | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.1.3 | Boolean | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.1.4 | Date/Time | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.1.5 | Duration | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.1.6 | Unsigned Byte | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.1.7 | Signed Byte | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.1.8 | Unsigned Short | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.1.9 | Signed Short | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.1.10 | Unsigned Int | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.1.11 | Signed Int | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.1.12 | Unsigned Long | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.1.13 | Signed Long | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.1.14 | Float | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.1.15 | Double | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.1.16 | Decimal | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.1.17 | Array of Bytes | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.1.18 | GUID | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.1.19 | URI | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.1.20 | Null Value | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.1.21 | Version | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.1.22 | XML Document | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.1.23 | ScriptBlock | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.1.24 | Secure String | wip | wip | <SS> text round-trips; AES session-key encryption pending (TODO PSRP-04) |
+| 2.2.5.1.25 | Progress Record | wip | wip | parses/serializes as a generic complex object; typed accessors pending |
+| 2.2.5.1.26 | Information Record | wip | wip | parses/serializes as a generic complex object; typed accessors pending |
+| 2.2.5.2 | Serialization of Complex Objects | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.2.1 | Referencing Earlier Objects | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.2.1.1 | RefId Attribute | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.2.1.2 | <Ref> Element | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.2.2 | <Obj> Element | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.2.3 | Type Names | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.2.4 | ToString | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.2.5 | Contents of Extended Primitive Objects | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.2.6 | Contents of Known Containers | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.2.6.1 | Stack | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.2.6.2 | Queue | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.2.6.3 | List | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.2.6.4 | Dictionaries | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.2.7 | Contents of Enums | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.2.8 | Adapted Properties | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.2.9 | Extended Properties | done | done | serialize + deserialize, round-trip tested |
 | 2.2.5.3 | Miscellaneous | todo | todo | |
 | 2.2.5.3.1 | Property Name | wip | wip | N= attribute written and escaped; read pending |
 | 2.2.5.3.2 | Encoding Strings | done | done | matches real PowerShell, incl. underscore-before-x rule and surrogate escapes |
