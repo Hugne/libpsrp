@@ -25,7 +25,7 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | Section | Title | Impl | Tests | Notes |
 |---|---|---|---|---|
 | 2.2.1 | PowerShell Remoting Protocol Message | todo | todo | |
-| 2.2.4 | Packet Fragment | todo | todo | |
+| 2.2.4 | Packet Fragment | done | done | encode/decode/split + streaming defragmenter; reserved bits ignored on receipt |
 
 ## Message Types (2.2.2)
 

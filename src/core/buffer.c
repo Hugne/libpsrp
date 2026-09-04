@@ -156,9 +156,12 @@ size_t psrp_reader_remaining(const psrp_reader_t *r)
     return r->len - r->pos;
 }
 
+/* A reader over an empty (even NULL) buffer is a legitimate state: it simply
+ * has no bytes yet. That is TRUNCATED, not a caller error, so a streaming
+ * decoder can retry once more data arrives. Only a NULL reader is invalid. */
 static psrp_result_t reader_need(psrp_reader_t *r, size_t n)
 {
-    if (!r || !r->data) return PSRP_ERR_INVALID_ARG;
+    if (!r) return PSRP_ERR_INVALID_ARG;
     if (psrp_reader_remaining(r) < n) return PSRP_ERR_TRUNCATED;
     return PSRP_OK;
 }

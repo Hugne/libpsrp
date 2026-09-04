@@ -212,13 +212,23 @@ PSRP_TEST(reader_bytes_borrow_and_skip)
     ASSERT_ERR(psrp_reader_skip(&r, 1), PSRP_ERR_TRUNCATED);
 }
 
+/* An empty reader is valid and simply has nothing yet: reads must report
+ * TRUNCATED so a streaming decoder can retry, not INVALID_ARG. */
 PSRP_TEST(reader_empty_input)
 {
     psrp_reader_t r;
     uint8_t v;
     psrp_reader_init(&r, NULL, 0);
     ASSERT_EQ_SZ(psrp_reader_remaining(&r), 0u);
-    ASSERT_ERR(psrp_read_u8(&r, &v), PSRP_ERR_INVALID_ARG);
+    ASSERT_ERR(psrp_read_u8(&r, &v), PSRP_ERR_TRUNCATED);
+
+    /* Same for a non-NULL but fully consumed buffer. */
+    psrp_reader_init(&r, "a", 1);
+    ASSERT_OK(psrp_read_u8(&r, &v));
+    ASSERT_ERR(psrp_read_u8(&r, &v), PSRP_ERR_TRUNCATED);
+
+    /* A NULL reader is still a caller error. */
+    ASSERT_ERR(psrp_read_u8(NULL, &v), PSRP_ERR_INVALID_ARG);
 }
 
 PSRP_TEST(reader_zero_byte_read_ok)
