@@ -43,6 +43,7 @@ add_library(psrp STATIC
   src/proto/object_complex.c
   src/xml/xml_xmllite.c
   src/proto/clixml_read.c
+  src/proto/messages.c
 )
 add_library(psrp::psrp ALIAS psrp)
 

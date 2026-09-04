@@ -32,7 +32,7 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | Section | Title | Impl | Tests | Notes |
 |---|---|---|---|---|
 | 2.2.2 | Message Types | wip | wip | all 31 type codes done + verified; per-message Data bodies need CLIXML (2.2.5) |
-| 2.2.2.1 | SESSION_CAPABILITY Message | todo | todo | |
+| 2.2.2.1 | SESSION_CAPABILITY Message | done | done | build + parse; TimeZone ignored (PSRP does not interpret it) |
 | 2.2.2.2 | INIT_RUNSPACEPOOL Message | todo | todo | |
 | 2.2.2.3 | PUBLIC_KEY Message | todo | todo | |
 | 2.2.2.4 | ENCRYPTED_SESSION_KEY Message | todo | todo | |
@@ -40,7 +40,7 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 2.2.2.6 | SET_MAX_RUNSPACES Message | todo | todo | |
 | 2.2.2.7 | SET_MIN_RUNSPACES Message | todo | todo | |
 | 2.2.2.8 | RUNSPACE_AVAILABILITY Message | todo | todo | |
-| 2.2.2.9 | RUNSPACEPOOL_STATE Message | todo | todo | |
+| 2.2.2.9 | RUNSPACEPOOL_STATE Message | done | done | parse incl. optional ExceptionAsErrorRecord text |
 | 2.2.2.10 | CREATE_PIPELINE Message | todo | todo | |
 | 2.2.2.11 | GET_AVAILABLE_RUNSPACES Message | todo | todo | |
 | 2.2.2.12 | USER_EVENT Message | todo | todo | |
@@ -52,7 +52,7 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 2.2.2.18 | END_OF_PIPELINE_INPUT Message | todo | todo | |
 | 2.2.2.19 | PIPELINE_OUTPUT Message | todo | todo | |
 | 2.2.2.20 | ERROR_RECORD Message | todo | todo | |
-| 2.2.2.21 | PIPELINE_STATE Message | todo | todo | |
+| 2.2.2.21 | PIPELINE_STATE Message | done | done | parse incl. optional ExceptionAsErrorRecord text |
 | 2.2.2.22 | DEBUG_RECORD Message | todo | todo | |
 | 2.2.2.23 | VERBOSE_RECORD Message | todo | todo | |
 | 2.2.2.24 | WARNING_RECORD Message | todo | todo | |
@@ -72,8 +72,8 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 2.2.3.1 | Coordinates | todo | todo | |
 | 2.2.3.2 | Size | todo | todo | |
 | 2.2.3.3 | Color | todo | todo | |
-| 2.2.3.4 | RunspacePoolState | todo | todo | |
-| 2.2.3.5 | PSInvocationState | todo | todo | |
+| 2.2.3.4 | RunspacePoolState | done | done | all 10 values + terminal-state helper |
+| 2.2.3.5 | PSInvocationState | done | done | all 7 values + terminal-state helper |
 | 2.2.3.6 | PSThreadOptions | todo | todo | |
 | 2.2.3.7 | ApartmentState | todo | todo | |
 | 2.2.3.8 | RemoteStreamOptions | todo | todo | |
