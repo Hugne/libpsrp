@@ -196,6 +196,79 @@ void psrp_host_default_data_defaults(psrp_host_default_data_t *out);
 psrp_result_t psrp_host_build_default_data(const psrp_host_default_data_t *d,
                                            psrp_value_t *out);
 
+/* ------------------- keyboard, buffer and credential types ------------- */
+/*
+ * Note which property bag each type uses: KeyInfo carries extended
+ * properties (<MS>) while BufferCell and PSCredential carry adapted ones
+ * (<Props>). Reading from the wrong bag simply finds nothing, so the
+ * distinction is load-bearing rather than cosmetic.
+ */
+
+/* 2.2.3.27 ControlKeyStates: bit flags in a signed int. */
+#define PSRP_CONTROL_KEY_RIGHT_ALT   0x0001
+#define PSRP_CONTROL_KEY_LEFT_ALT    0x0002
+#define PSRP_CONTROL_KEY_RIGHT_CTRL  0x0004
+#define PSRP_CONTROL_KEY_LEFT_CTRL   0x0008
+#define PSRP_CONTROL_KEY_SHIFT       0x0010
+#define PSRP_CONTROL_KEY_NUM_LOCK    0x0020
+#define PSRP_CONTROL_KEY_SCROLL_LOCK 0x0040
+#define PSRP_CONTROL_KEY_CAPS_LOCK   0x0080
+#define PSRP_CONTROL_KEY_ENHANCED    0x0100
+
+/* 2.2.3.29 BufferCellType. */
+typedef enum psrp_buffer_cell_type {
+    PSRP_BUFFER_CELL_COMPLETE = 0,
+    PSRP_BUFFER_CELL_LEADING = 1,
+    PSRP_BUFFER_CELL_TRAILING = 2
+} psrp_buffer_cell_type_t;
+
+/* 2.2.3.30 CommandOrigin. PSRP MUST NOT interpret this. */
+typedef enum psrp_command_origin {
+    PSRP_COMMAND_ORIGIN_RUNSPACE = 0,
+    PSRP_COMMAND_ORIGIN_INTERNAL = 1
+} psrp_command_origin_t;
+
+const char *psrp_buffer_cell_type_name(int32_t type);
+const char *psrp_command_origin_name(int32_t origin);
+
+/* 2.2.3.26 KeyInfo, in extended properties. */
+typedef struct psrp_key_info {
+    int32_t virtual_key_code;
+    uint16_t character;        /* a UTF-16 code unit */
+    int32_t control_key_state; /* PSRP_CONTROL_KEY_* flags */
+    bool key_down;
+} psrp_key_info_t;
+
+psrp_result_t psrp_host_make_key_info(const psrp_key_info_t *k,
+                                      psrp_value_t *out);
+psrp_result_t psrp_host_read_key_info(const psrp_value_t *v,
+                                      psrp_key_info_t *out);
+
+/* 2.2.3.28 BufferCell, in adapted properties. The colours are 2.2.3.3
+ * Color wrappers, not bare ints. */
+typedef struct psrp_buffer_cell {
+    uint16_t character;
+    int32_t foreground_color;
+    int32_t background_color;
+    int32_t cell_type;         /* psrp_buffer_cell_type_t */
+} psrp_buffer_cell_t;
+
+psrp_result_t psrp_host_make_buffer_cell(const psrp_buffer_cell_t *c,
+                                         psrp_value_t *out);
+psrp_result_t psrp_host_read_buffer_cell(const psrp_value_t *v,
+                                         psrp_buffer_cell_t *out);
+
+/* 2.2.3.25 PSCredential, in adapted properties, and it MUST carry its type
+ * names. The password is a SecureString: pass the base64 ciphertext produced
+ * by psrp_crypto_encrypt_string, since a credential can only be sent after
+ * the session key exchange. */
+psrp_result_t psrp_host_make_credential(const char *username,
+                                        const char *password_ciphertext_b64,
+                                        psrp_value_t *out);
+/* Both outputs are allocated and owned by the caller; either may be NULL. */
+psrp_result_t psrp_host_read_credential(const psrp_value_t *v, char **username,
+                                        char **password_ciphertext_b64);
+
 #ifdef __cplusplus
 }
 #endif

@@ -97,12 +97,12 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 2.2.3.22 | CommandMetadata | done | done | parse name, namespace, help uri, type, parameter names |
 | 2.2.3.23 | ParameterMetadata | wip | wip | parameter names surfaced; per-parameter detail deferred (TODO PSRP-10) |
 | 2.2.3.24 | ArgumentList | todo | todo | |
-| 2.2.3.25 | PSCredential | todo | todo | |
-| 2.2.3.26 | KeyInfo | todo | todo | |
-| 2.2.3.27 | ControlKeyStates | todo | todo | |
-| 2.2.3.28 | BufferCell | todo | todo | |
-| 2.2.3.29 | BufferCellType | todo | todo | |
-| 2.2.3.30 | CommandOrigin | todo | todo | |
+| 2.2.3.25 | PSCredential | done | done | adapted properties, required type names, SecureString password |
+| 2.2.3.26 | KeyInfo | done | done | extended properties; build + read |
+| 2.2.3.27 | ControlKeyStates | done | done | all nine bit flags |
+| 2.2.3.28 | BufferCell | done | done | adapted properties; colours are Color wrappers |
+| 2.2.3.29 | BufferCellType | done | done | Complete/Leading/Trailing |
+| 2.2.3.30 | CommandOrigin | done | done | Runspace/Internal |
 | 2.2.3.31 | PipelineResultTypes | done | done | bit flags defined |
 
 ## Serialization (2.2.5)
