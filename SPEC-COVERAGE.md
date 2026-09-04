@@ -34,9 +34,9 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 2.2.2 | Message Types | wip | wip | all 31 type codes done + verified; per-message Data bodies need CLIXML (2.2.5) |
 | 2.2.2.1 | SESSION_CAPABILITY Message | done | done | build + parse; TimeZone ignored (PSRP does not interpret it) |
 | 2.2.2.2 | INIT_RUNSPACEPOOL Message | done | done | build; ApplicationArguments sent as Null |
-| 2.2.2.3 | PUBLIC_KEY Message | todo | todo | |
-| 2.2.2.4 | ENCRYPTED_SESSION_KEY Message | todo | todo | |
-| 2.2.2.5 | PUBLIC_KEY_REQUEST Message | todo | todo | |
+| 2.2.2.3 | PUBLIC_KEY Message | done | done | build; 276-byte CryptoAPI PUBLICKEYBLOB, little-endian |
+| 2.2.2.4 | ENCRYPTED_SESSION_KEY Message | done | done | parse SIMPLEBLOB and import the AES-256 key |
+| 2.2.2.5 | PUBLIC_KEY_REQUEST Message | done | done | build and recognise the empty string payload |
 | 2.2.2.6 | SET_MAX_RUNSPACES Message | done | done | build; ci is a Signed Long |
 | 2.2.2.7 | SET_MIN_RUNSPACES Message | done | done | build; ci is a Signed Long |
 | 2.2.2.8 | RUNSPACE_AVAILABILITY Message | done | done | parse; response is Boolean or Signed Long depending on the request |
@@ -134,7 +134,7 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 2.2.5.1.21 | Version | done | done | serialize + deserialize, round-trip tested |
 | 2.2.5.1.22 | XML Document | done | done | serialize + deserialize, round-trip tested |
 | 2.2.5.1.23 | ScriptBlock | done | done | serialize + deserialize, round-trip tested |
-| 2.2.5.1.24 | Secure String | wip | wip | <SS> text round-trips; AES session-key encryption pending (TODO PSRP-04) |
+| 2.2.5.1.24 | Secure String | done | done | AES-256-CBC under the session key, zero IV, UTF-16LE plaintext |
 | 2.2.5.1.25 | Progress Record | done | done | parse to typed fields |
 | 2.2.5.1.26 | Information Record | done | done | parse to typed fields |
 | 2.2.5.2 | Serialization of Complex Objects | done | done | serialize + deserialize, round-trip tested |
@@ -188,7 +188,7 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 3.1.1.1 | Global Data | todo | todo | |
 | 3.1.1.1.1 | WSMV ShellID to RunspacePool Table | todo | todo | |
 | 3.1.1.1.2 | WSMV CommandId to Pipeline Table | todo | todo | |
-| 3.1.1.1.3 | Public Key Pair | todo | todo | |
+| 3.1.1.1.3 | Public Key Pair | done | done | 2048-bit RSA generated per crypto context |
 | 3.1.1.2 | RunspacePool Data | wip | wip | id/state/defrag done; session key + information tables pending |
 | 3.1.1.2.1 | GUID | done | done | pool id, random v4 from the platform CSPRNG |
 | 3.1.1.2.2 | RunspacePool State | done | done | tracked and exposed |
@@ -196,7 +196,7 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 3.1.1.2.4 | WSMV Shell | todo | todo | |
 | 3.1.1.2.5 | RunspacePool Information CI Table | todo | todo | |
 | 3.1.1.2.6 | Pipeline Table | todo | todo | |
-| 3.1.1.2.7 | Session Key | todo | todo | |
+| 3.1.1.2.7 | Session Key | done | done | held by the crypto context once exchanged |
 | 3.1.1.2.8 | SessionKeyTransferTimeoutms | todo | todo | |
 | 3.1.1.3 | Pipeline Data | wip | wip | id/state/defrag done; WSMV command handle is the transport's |
 | 3.1.1.3.1 | GUID | done | done | pipeline id allocated per pipeline |
@@ -213,7 +213,7 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 3.1.4.5 | Getting Command Metadata | todo | todo | |
 | 3.1.4.6 | Setting the Minimum or Maximum Runspaces in a RunspacePool | done | done | builders + availability response |
 | 3.1.4.7 | Getting the Number of Available Runspaces in a RunspacePool | done | done | builder + availability response |
-| 3.1.4.8 | Initiating a Session Key Exchange | todo | todo | |
+| 3.1.4.8 | Initiating a Session Key Exchange | done | done | public key export + encrypted session key import |
 | 3.1.4.9 | Disconnecting from a RunspacePool | todo | todo | |
 | 3.1.4.10 | Connecting to a RunspacePool | todo | todo | |
 | 3.1.4.10.2 | Connecting to a RunspacePool from a Previous Client Session | todo | todo | |

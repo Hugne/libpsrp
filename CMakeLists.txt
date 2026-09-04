@@ -51,6 +51,7 @@ add_library(psrp STATIC
   src/proto/messages_pool.c
   src/transport/transport_wsman.c
   src/state/host.c
+  src/crypto/crypto_cng.c
 )
 add_library(psrp::psrp ALIAS psrp)
 
