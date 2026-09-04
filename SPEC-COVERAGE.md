@@ -29,6 +29,7 @@ Four more entries there are genuine limits rather than divergences.
 | base64 / hex | done | done | RFC 4648 vectors |
 | UTF-8 validation, UTF-8<->UTF-16 | done | done | needed for XmlLite (UTF-16) |
 | Build: CMake+Ninja, MSVC & clang, CTest | done | done | both green, warnings-as-errors |
+| Fuzzing + AddressSanitizer | done | done | every parser; ASan build runs the fuzz label and the live test |
 
 
 ## Message Layer

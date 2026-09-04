@@ -160,23 +160,26 @@ plus ASan/UBSan builds under clang.
 Each phase ends green: builds clean, tests pass, `SPEC-COVERAGE.md` updated,
 committed. Phases 0–6 are the critical path to a working client.
 
-| # | Phase | Spec | Exit criteria |
-|---|---|---|---|
-| 0 | Scaffold: CMake/Ninja/CTest, error model, buffers, base64/hex/GUID/UTF-8 | — | `ctest` green with utility tests |
-| 1 | Fragment layer | 2.2.4 | Fragment/defragment round-trip; malformed input rejected, never crashes |
-| 2 | Message header + all 31 type codes | 2.2.1, 2.2.2 | Header pack/unpack round-trip; type enum complete |
-| 3a | CLIXML: primitives | 2.2.5.1 (26 types) | All primitives round-trip; golden vectors parse |
-| 3b | CLIXML: complex objects, containers, RefId graph | 2.2.5.2 | Lists/dicts/stacks/queues/enums/refs; cyclic graphs safe |
-| 3c | CLIXML: string encoding, property sets, ToString, type names | 2.2.5.3 | `_xNNNN_` escaping exact; full golden corpus green |
-| 4 | Typed bodies for the "run a command" message set | 2.2.2.1/2/9/10/19/20/21 | Build and parse each from/to objects |
-| 5 | Runspace pool + pipeline state machines (sans-IO) | 3.1 | Canned-byte-stream tests drive open→run→output→close |
-| 6 | **WSMan transport + first live run** | 2.1 | Interop test opens a pool on localhost and returns the computer name |
-| 7 | Remaining streams: debug/verbose/warning/progress/information, pipeline input | 2.2.2.17/18/22–26 | Each stream surfaces through the public API |
-| 8 | Host method calls + host interface | 2.2.6, 2.2.2.15/16/27/28 | `Write-Host`/prompt round-trip to a caller-supplied host |
-| 9 | Crypto: public key exchange, SecureString | 2.2.2.3/4/5, 2.2.5.1.24 | PSCredential survives a round trip to a real endpoint |
-| 10 | Remaining messages: min/max runspaces, availability, user event, app private data, command metadata, connect/reconnect, reset | 2.2.2.6–8/11–14/29–31 | `SPEC-COVERAGE.md` has no `todo` in section 2 |
-| 11 | Hardening: fuzzing, sanitizers, leak checks, API docs, examples | — | Fuzzers run clean; public headers documented |
-| 12 | Server side (if in scope) | 3.2 | Decide at sign-off — see Open Questions |
+All phases below are complete except where a row says otherwise. Phase 12 was
+struck at sign-off: client only.
+
+| # | Phase | Spec | Exit criteria | Status |
+|---|---|---|---|---|
+| 0 | Scaffold: CMake/Ninja/CTest, error model, buffers, base64/hex/GUID/UTF-8 | — | `ctest` green with utility tests | done |
+| 1 | Fragment layer | 2.2.4 | Fragment/defragment round-trip; malformed input rejected, never crashes | done |
+| 2 | Message header + all 31 type codes | 2.2.1, 2.2.2 | Header pack/unpack round-trip; type enum complete | done |
+| 3a | CLIXML: primitives | 2.2.5.1 (26 types) | All primitives round-trip; golden vectors parse | done |
+| 3b | CLIXML: complex objects, containers, RefId graph | 2.2.5.2 | Lists/dicts/stacks/queues/enums/refs; cyclic graphs safe | done |
+| 3c | CLIXML: string encoding, property sets, ToString, type names | 2.2.5.3 | `_xNNNN_` escaping exact; full golden corpus green | done |
+| 4 | Typed bodies for the "run a command" message set | 2.2.2.1/2/9/10/19/20/21 | Build and parse each from/to objects | done |
+| 5 | Runspace pool + pipeline state machines (sans-IO) | 3.1 | Canned-byte-stream tests drive open→run→output→close | done |
+| 6 | **WSMan transport + first live run** | 2.1 | Interop test opens a pool on localhost and returns the computer name | done |
+| 7 | Remaining streams: debug/verbose/warning/progress/information, pipeline input | 2.2.2.17/18/22–26 | Each stream surfaces through the public API | done |
+| 8 | Host method calls + host interface | 2.2.6, 2.2.2.15/16/27/28 | `Write-Host`/prompt round-trip to a caller-supplied host | done |
+| 9 | Crypto: public key exchange, SecureString | 2.2.2.3/4/5, 2.2.5.1.24 | PSCredential survives a round trip to a real endpoint | done |
+| 10 | Remaining messages: min/max runspaces, availability, user event, app private data, command metadata, connect/reconnect, reset | 2.2.2.6–8/11–14/29–31 | `SPEC-COVERAGE.md` has no `todo` in section 2 | done |
+| 11 | Hardening: fuzzing, sanitizers, leak checks | — | Fuzzers run clean under a sanitizer; every parser reaches real code | done |
+| 12 | Server side (if in scope) | 3.2 | Decide at sign-off — see Open Questions | struck: client only |
 
 ---
 

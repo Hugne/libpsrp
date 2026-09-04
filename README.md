@@ -25,6 +25,21 @@ another pipeline through the same pool:
     shell closed
 ```
 
+## Hardening
+
+Everything a server sends is untrusted, so every parser is fuzzed:
+
+```
+scripts\build-asan.bat        # AddressSanitizer build, runs the fuzz label
+ctest -L fuzz                 # just the fuzzer
+PSRP_FUZZ_ITERATIONS=1000000 PSRP_FUZZ_SEED=42 fuzz_parsers   # a soak
+```
+
+The fuzzer is deterministic, so a failure reproduces from its seed. It also
+reports how often each target actually accepted its input and fails if any
+target never did: a fuzzer that only ever exercises rejection paths looks
+identical to one that found nothing.
+
 ## Layout
 
 - `include/psrp/` — the public API.
