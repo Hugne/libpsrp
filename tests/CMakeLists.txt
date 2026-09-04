@@ -30,3 +30,11 @@ psrp_add_unit_test(test_messages_pipeline unit/test_messages_pipeline.c)
 psrp_add_unit_test(test_records unit/test_records.c)
 psrp_add_unit_test(test_session unit/test_session.c)
 psrp_add_unit_test(test_messages_pool unit/test_messages_pool.c)
+
+# Live interop test. Labelled so it can be selected or excluded; it skips
+# itself unless PSRP_INTEROP=1, so the default run needs no WinRM.
+add_executable(test_live interop/test_live.c)
+target_link_libraries(test_live PRIVATE psrp psrp_flags)
+target_include_directories(test_live PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME interop.test_live COMMAND test_live)
+set_tests_properties(interop.test_live PROPERTIES LABELS "interop" TIMEOUT 180)

@@ -27,6 +27,7 @@ implementing goes here. Nothing is dropped silently.
 | PSRP-03 | Transport | 2.1 | Non-Windows transport (raw HTTP/SOAP WSMan) | First transport is Win32 WSMan. Core is sans-IO so this is additive. | open |
 | PSRP-04 | Crypto | 2.2.5.1.24 | SecureString encryption requires session key exchange | Scheduled phase 9; until then SecureString round-trips only as an opaque/rejected value. | open |
 | PSRP-07 | HostInfo | 2.2.3.14 | Populated `_hostDefaultData` dictionary (colors, coordinates, sizes, window title) | Only meaningful when the client supplies a real host implementation. The spec's own example shows a null host omitting it entirely, and that is what we send. Needed for host method calls (phase 8). | open |
+| PSRP-08 | Transport | 3.1.5.3.3 | rsp:Command is sent as a single space rather than empty | The spec says the Command element MUST be empty, but the Win32 WSMan client refuses an empty command line client-side (0x80338180) in both WSManRunShellCommand and the Ex form. A single space is the closest achievable and a real PowerShell endpoint accepts it, verified by the live interop test. Only a hand-rolled SOAP transport could send a truly empty element. | open |
 | PSRP-06 | Server role | 3.2 | Server-side protocol details | **Out of scope** by sign-off: client only. Recorded here so the exclusion is explicit rather than an oversight. | wontfix |
 
 ## Closed

@@ -1,0 +1,79 @@
+/* psrp_transport.h - carrying PSRP over WSMan ([MS-PSRP] 3.1.5.3).
+ *
+ * The protocol core does no I/O; this is the piece that does. It is kept
+ * behind a narrow interface so the session can be driven by a real WinRM
+ * endpoint or by a test double.
+ *
+ * The mapping of PSRP onto WSMan requests, from 3.1.5.3:
+ *
+ *   open()        -> wxf:Create. The payload is base64'd into a <creationXml>
+ *                    element carried as the Create open content.
+ *   run_command() -> wxf:Command. The Command element MUST be empty and
+ *                    Arguments carries only the FIRST fragment; the rest are
+ *                    sent afterwards with Send. This function handles that
+ *                    split itself.
+ *   send()        -> wxf:Send on the "stdin" stream (or "pr" for host
+ *                    responses).
+ *   receive()     -> wxf:Receive on the "stdout" stream.
+ */
+#ifndef PSRP_TRANSPORT_H
+#define PSRP_TRANSPORT_H
+
+#include "psrp/psrp_buffer.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct psrp_transport psrp_transport_t;
+
+typedef struct psrp_wsman_config {
+    /* e.g. L"http://localhost:5985/wsman". NULL uses that default. */
+    const wchar_t *connection;
+    /* NULL authenticates as the current user via Negotiate. */
+    const wchar_t *username;
+    const wchar_t *password;
+    /* 0 selects the 240000 ms the spec's appendix cites as typical. */
+    uint32_t operation_timeout_ms;
+} psrp_wsman_config_t;
+
+psrp_result_t psrp_wsman_transport_create(const psrp_wsman_config_t *cfg,
+                                          psrp_transport_t **out);
+void psrp_transport_free(psrp_transport_t *t);
+
+/* Creates the remote shell, carrying psrp_session_open_payload's output in
+ * <creationXml>. `shell_id` becomes the WSMan ShellId; pass the RunspacePool
+ * GUID so the WSMan and PSRP id spaces line up, as PowerShell does. */
+psrp_result_t psrp_transport_open(psrp_transport_t *t,
+                                  const psrp_guid_t *shell_id,
+                                  const void *payload, size_t len);
+
+/* Starts a pipeline from psrp_session_pipeline_payload's output.
+ * `command_id` becomes the WSMan CommandId; pass the pipeline GUID.
+ * Only the first fragment may go in Arguments (3.1.5.3.3); this splits the
+ * payload and sends any remainder itself. */
+psrp_result_t psrp_transport_run_command(psrp_transport_t *t,
+                                         const psrp_guid_t *command_id,
+                                         const void *payload, size_t len);
+
+/* Sends bytes on the "stdin" stream. */
+psrp_result_t psrp_transport_send(psrp_transport_t *t,
+                                  const void *data, size_t len);
+
+/* Appends whatever has arrived on "stdout", waiting up to `timeout_ms` for at
+ * least one byte. Returns PSRP_ERR_TRUNCATED if nothing arrived in time,
+ * which is a normal "keep waiting" answer rather than a failure. */
+psrp_result_t psrp_transport_receive(psrp_transport_t *t, psrp_buffer_t *out,
+                                     uint32_t timeout_ms);
+
+/* True once the remote command has reported it is done. */
+bool psrp_transport_command_done(const psrp_transport_t *t);
+
+/* Human-readable detail for the last failure; never NULL. */
+const char *psrp_transport_last_error(const psrp_transport_t *t);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* PSRP_TRANSPORT_H */

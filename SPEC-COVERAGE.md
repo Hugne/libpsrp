@@ -218,20 +218,20 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 3.1.4.10 | Connecting to a RunspacePool | todo | todo | |
 | 3.1.4.10.2 | Connecting to a RunspacePool from a Previous Client Session | todo | todo | |
 | 3.1.4.10.3 | Connecting to a RunspacePool from a New Client Session | todo | todo | |
-| 3.1.5 | Message Processing Events and Sequencing Rules | wip | wip | send/receive rules done; sequencing details pending |
+| 3.1.5 | Message Processing Events and Sequencing Rules | done | done | send/receive rules, WSMan binding, and sequencing verified live |
 | 3.1.5.1 | General Rules | todo | todo | |
 | 3.1.5.1.1 | Rules for Sending Data | done | done | message framing + fragmentation on send |
 | 3.1.5.1.2 | Rules for Receiving Data | done | done | defragment, decode, dispatch to events |
-| 3.1.5.2 | Sequencing Rules | todo | todo | |
-| 3.1.5.3 | Rules for Processing WS-MAN Messages | todo | todo | |
-| 3.1.5.3.1 | Rules for the wxf:Create Message | todo | todo | |
-| 3.1.5.3.2 | Rules for the wxf:ResourceCreated Message | todo | todo | |
-| 3.1.5.3.3 | Rules for the wxf:Command Message | todo | todo | |
-| 3.1.5.3.4 | Rules for the wxf:CommandResponse Message | todo | todo | |
-| 3.1.5.3.5 | Rules for the wxf:Send Message | todo | todo | |
-| 3.1.5.3.6 | Rules for the wxf:SendResponse Message | todo | todo | |
-| 3.1.5.3.7 | Rules for the wxf:Receive Message | todo | todo | |
-| 3.1.5.3.8 | Rules for the wxf:ReceiveResponse Message | todo | todo | |
+| 3.1.5.2 | Sequencing Rules | done | done | capability first, then init; pool must be Opened before a pipeline |
+| 3.1.5.3 | Rules for Processing WS-MAN Messages | done | done | Create/Command/Send/Receive implemented |
+| 3.1.5.3.1 | Rules for the wxf:Create Message | done | done | creationXml + protocolversion option + stdin/pr/stdout streams |
+| 3.1.5.3.2 | Rules for the wxf:ResourceCreated Message | done | done | shell handle tracked by the WSMan client |
+| 3.1.5.3.3 | Rules for the wxf:Command Message | done | done | first fragment in Arguments, remainder via Send (see TODO PSRP-08) |
+| 3.1.5.3.4 | Rules for the wxf:CommandResponse Message | done | done | command handle tracked by the WSMan client |
+| 3.1.5.3.5 | Rules for the wxf:Send Message | done | done | stdin stream |
+| 3.1.5.3.6 | Rules for the wxf:SendResponse Message | done | done | completion handled by the WSMan client |
+| 3.1.5.3.7 | Rules for the wxf:Receive Message | done | done | stdout stream, re-posted until the command is Done |
+| 3.1.5.3.8 | Rules for the wxf:ReceiveResponse Message | done | done | stream data fed to the session |
 | 3.1.5.3.9 | Rules for the wxf:Signal Message | todo | todo | |
 | 3.1.5.3.10 | Rules for the wxf:SignalResponse Message | todo | todo | |
 | 3.1.5.3.11 | Rules for the wxf:Delete Message | todo | todo | |
