@@ -227,3 +227,48 @@ committed. Phases 0–6 are the critical path to a working client.
 
 The phase table's row 12 is struck: client only. "Fully implemented" means every
 client-side section in `SPEC-COVERAGE.md` is `done`.
+
+---
+
+## 11. WSMan transport binding (phase 6 notes)
+
+Facts confirmed against [MS-PSRP] section 3.1.5.3 and its appendix, recorded
+here so the transport work does not have to re-derive them.
+
+| Item | Value |
+|---|---|
+| Resource URI | `http://schemas.microsoft.com/PowerShell/Microsoft.PowerShell` |
+| Transport | HTTP on 5985, HTTPS on 5986, application `WSMan` |
+| ShellId | the RunspacePool GUID (our `psrp_session_pool_id`) |
+| CommandId | the pipeline GUID (from `psrp_session_pipeline_payload`) |
+| Default operation timeout | 240000 ms |
+
+**Beware the capitalisation.** The resource URI spells it `PowerShell`, but the
+creationXml namespace spells it `powershell`:
+
+```
+<creationXml xmlns="http://schemas.microsoft.com/powershell">BASE64</creationXml>
+```
+
+The Connect equivalent is `<connectXml xmlns="http://schemas.microsoft.com/">`,
+which is a third, shorter namespace. These three differ on purpose and getting
+one wrong fails only against a live server.
+
+### Mapping our three payload functions onto WSMan
+
+| libpsrp call | WSMan request | Where the bytes go |
+|---|---|---|
+| `psrp_session_open_payload` | `WSManCreateShellEx` | base64 inside `<creationXml>` as the Create open content |
+| `psrp_session_pipeline_payload` | `WSManRunShellCommandEx` | the command's arguments, with CommandId = pipeline GUID |
+| `psrp_session_take_output` | `WSManSendShellInput` | the `stdin` stream |
+| (incoming) | `WSManReceiveShellOutput` | the `stdout` stream, fed to `psrp_session_receive` |
+
+Ordering rule from the spec: SESSION_CAPABILITY MUST be the first message the
+client sends, and both it and INIT_RUNSPACEPOOL normally fit in one fragment
+each and travel together in the creationXml. Our `open_payload` already emits
+them in that order.
+
+The existing WSMan shell code in `../winrm/wsman_shell.h` is the starting
+point; it already does session, shell, command, send and receive against the
+cmd shell URI, and needs the PowerShell URI, the creationXml wrapper, and
+explicit Shell/Command ids.
