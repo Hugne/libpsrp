@@ -48,16 +48,16 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 2.2.2.14 | GET_COMMAND_METADATA Message | todo | todo | |
 | 2.2.2.15 | RUNSPACEPOOL_HOST_CALL Message | todo | todo | |
 | 2.2.2.16 | RUNSPACEPOOL_HOST_RESPONSE Message | todo | todo | |
-| 2.2.2.17 | PIPELINE_INPUT Message | todo | todo | |
+| 2.2.2.17 | PIPELINE_INPUT Message | done | done | serialize any value |
 | 2.2.2.18 | END_OF_PIPELINE_INPUT Message | todo | todo | |
-| 2.2.2.19 | PIPELINE_OUTPUT Message | todo | todo | |
-| 2.2.2.20 | ERROR_RECORD Message | todo | todo | |
+| 2.2.2.19 | PIPELINE_OUTPUT Message | done | done | deserialize any value + text rendering |
+| 2.2.2.20 | ERROR_RECORD Message | done | done | parse to typed fields |
 | 2.2.2.21 | PIPELINE_STATE Message | done | done | parse incl. optional ExceptionAsErrorRecord text |
-| 2.2.2.22 | DEBUG_RECORD Message | todo | todo | |
-| 2.2.2.23 | VERBOSE_RECORD Message | todo | todo | |
-| 2.2.2.24 | WARNING_RECORD Message | todo | todo | |
-| 2.2.2.25 | PROGRESS_RECORD Message | todo | todo | |
-| 2.2.2.26 | INFORMATION_RECORD Message | todo | todo | |
+| 2.2.2.22 | DEBUG_RECORD Message | done | done | informational record parser |
+| 2.2.2.23 | VERBOSE_RECORD Message | done | done | informational record parser |
+| 2.2.2.24 | WARNING_RECORD Message | done | done | informational record parser |
+| 2.2.2.25 | PROGRESS_RECORD Message | done | done | parse to typed fields |
+| 2.2.2.26 | INFORMATION_RECORD Message | done | done | parse; properties arrive as adapted <Props> |
 | 2.2.2.27 | PIPELINE_HOST_CALL Message | todo | todo | |
 | 2.2.2.28 | PIPELINE_HOST_RESPONSE Message | todo | todo | |
 | 2.2.2.29 | CONNECT_RUNSPACEPOOL Message | todo | todo | |
@@ -77,7 +77,7 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 2.2.3.6 | PSThreadOptions | done | done | enum object with type names + ToString |
 | 2.2.3.7 | ApartmentState | done | done | enum object with type names + ToString |
 | 2.2.3.8 | RemoteStreamOptions | done | done | bit flags defined; sent in CREATE_PIPELINE |
-| 2.2.3.9 | ErrorCategory | todo | todo | |
+| 2.2.3.9 | ErrorCategory | done | done | names for 0-22 and 25 (23/24 undefined by spec) |
 | 2.2.3.10 | TimeZone | todo | todo | |
 | 2.2.3.10.1 | CurrentSystemTimeZone | todo | todo | |
 | 2.2.3.10.2 | Hashtable from int to DaylightTime Using Default Comparer | todo | todo | |
@@ -86,9 +86,9 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 2.2.3.12 | Command | done | done | Cmd/IsScript/UseLocalScope/merge flags/Args |
 | 2.2.3.13 | Command Parameter | done | done | named and positional (Null N) |
 | 2.2.3.14 | HostInfo | wip | wip | null-host form done; populated _hostDefaultData deferred (TODO PSRP-07) |
-| 2.2.3.15 | ErrorRecord | todo | todo | |
+| 2.2.3.15 | ErrorRecord | done | done | message, error id, category fields |
 | 2.2.3.15.1 | InvocationInfo-specific Extended Properties | todo | todo | |
-| 2.2.3.16 | InformationalRecord (DebugRecord, WarningRecord or VerboseRecord) | todo | todo | |
+| 2.2.3.16 | InformationalRecord (DebugRecord, WarningRecord or VerboseRecord) | done | done | message + invocation-info flag |
 | 2.2.3.17 | Host Method Identifier | todo | todo | |
 | 2.2.3.18 | Primitive Dictionary | todo | todo | |
 | 2.2.3.19 | CommandType | todo | todo | |
@@ -135,8 +135,8 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 2.2.5.1.22 | XML Document | done | done | serialize + deserialize, round-trip tested |
 | 2.2.5.1.23 | ScriptBlock | done | done | serialize + deserialize, round-trip tested |
 | 2.2.5.1.24 | Secure String | wip | wip | <SS> text round-trips; AES session-key encryption pending (TODO PSRP-04) |
-| 2.2.5.1.25 | Progress Record | wip | wip | parses/serializes as a generic complex object; typed accessors pending |
-| 2.2.5.1.26 | Information Record | wip | wip | parses/serializes as a generic complex object; typed accessors pending |
+| 2.2.5.1.25 | Progress Record | done | done | parse to typed fields |
+| 2.2.5.1.26 | Information Record | done | done | parse to typed fields |
 | 2.2.5.2 | Serialization of Complex Objects | done | done | serialize + deserialize, round-trip tested |
 | 2.2.5.2.1 | Referencing Earlier Objects | done | done | serialize + deserialize, round-trip tested |
 | 2.2.5.2.1.1 | RefId Attribute | done | done | serialize + deserialize, round-trip tested |
