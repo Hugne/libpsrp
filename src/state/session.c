@@ -47,6 +47,10 @@ struct psrp_session {
 
     psrp_init_runspacepool_t init;
 
+    /* Backing store for the capability's TimeZone, which is a borrowed
+     * pointer there and so needs to outlive the call that sets it. */
+    psrp_buffer_t timezone_blob;
+
     psrp_defrag_t *defrag;
     psrp_buffer_t outgoing;
     psrp_buffer_t outgoing_pr;   /* host responses; the WSMan "pr" stream */
@@ -120,6 +124,7 @@ psrp_session_t *psrp_session_new(void)
 
     psrp_buffer_init(&s->outgoing);
     psrp_buffer_init(&s->outgoing_pr);
+    psrp_buffer_init(&s->timezone_blob);
     s->pool_state = PSRP_RUNSPACE_BEFORE_OPEN;
     s->next_object_id = 1;      /* ObjectId 0 is illegal */
     s->next_ci = 1;
@@ -154,6 +159,7 @@ void psrp_session_free(psrp_session_t *s)
     psrp_defrag_free(s->defrag);
     psrp_buffer_free(&s->outgoing);
     psrp_buffer_free(&s->outgoing_pr);
+    psrp_buffer_free(&s->timezone_blob);
     free(s);
 }
 
@@ -398,6 +404,26 @@ static psrp_result_t emit(psrp_session_t *s, psrp_buffer_t *out, uint32_t type,
         rc = psrp_fragment_split(out, s->next_object_id++, msg.data, msg.len, 0);
     psrp_buffer_free(&msg);
     return rc;
+}
+
+psrp_result_t psrp_session_send_timezone(psrp_session_t *s)
+{
+    psrp_timezone_t tz;
+    psrp_result_t rc;
+
+    if (!s) return PSRP_ERR_INVALID_ARG;
+    if (s->pool_state != PSRP_RUNSPACE_BEFORE_OPEN) return PSRP_ERR_STATE;
+
+    rc = psrp_timezone_current(&tz);
+    if (rc != PSRP_OK) return rc;
+
+    psrp_buffer_reset(&s->timezone_blob);
+    rc = psrp_timezone_serialize(&tz, &s->timezone_blob);
+    if (rc != PSRP_OK) return rc;
+
+    s->local_capability.timezone_blob = s->timezone_blob.data;
+    s->local_capability.timezone_len = s->timezone_blob.len;
+    return PSRP_OK;
 }
 
 psrp_result_t psrp_session_open_payload(psrp_session_t *s, psrp_buffer_t *out)

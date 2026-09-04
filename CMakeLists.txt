@@ -55,6 +55,7 @@ add_library(psrp STATIC
   src/state/hostdata.c
   src/proto/metadata.c
   src/proto/primdict.c
+  src/proto/timezone.c
   src/state/hostvalues.c
   src/state/hostparams.c
 )

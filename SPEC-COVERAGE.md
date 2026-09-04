@@ -78,10 +78,10 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 2.2.3.7 | ApartmentState | done | done | enum object with type names + ToString |
 | 2.2.3.8 | RemoteStreamOptions | done | done | bit flags defined; sent in CREATE_PIPELINE |
 | 2.2.3.9 | ErrorCategory | done | done | names for 0-22 and 25 (23/24 undefined by spec) |
-| 2.2.3.10 | TimeZone | todo | todo | |
-| 2.2.3.10.1 | CurrentSystemTimeZone | todo | todo | |
-| 2.2.3.10.2 | Hashtable from int to DaylightTime Using Default Comparer | todo | todo | |
-| 2.2.3.10.3 | DaylightTime | todo | todo | |
+| 2.2.3.10 | TimeZone | done | done | MS-NRBF writer and reader; pinned to BinaryFormatter output |
+| 2.2.3.10.1 | CurrentSystemTimeZone | done | done | all four fields; opt-in on SESSION_CAPABILITY |
+| 2.2.3.10.2 | Hashtable from int to DaylightTime Using Default Comparer | done | done | written empty; the spec says the cache MAY be ignored |
+| 2.2.3.10.3 | DaylightTime | done | done | not emitted: it only ever appears inside the ignorable cache |
 | 2.2.3.11 | Pipeline | done | done | Cmds/IsNested/History/RedirectShellErrorOutputPipe |
 | 2.2.3.12 | Command | done | done | Cmd/IsScript/UseLocalScope/merge flags/Args |
 | 2.2.3.13 | Command Parameter | done | done | named and positional (Null N) |

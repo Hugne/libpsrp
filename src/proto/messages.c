@@ -164,6 +164,16 @@ psrp_result_t psrp_build_session_capability(const psrp_session_capability_t *cap
     if (rc == PSRP_OK) rc = add_version(o, "PSVersion", cap->ps_version);
     if (rc == PSRP_OK)
         rc = add_version(o, "SerializationVersion", cap->serialization_version);
+    /* TimeZone is a byte array holding the MS-NRBF graph (2.2.3.10). The spec
+     * says SHOULD, so an absent one is simply left out rather than sent as
+     * Null: the server treats a missing property and a null one differently. */
+    if (rc == PSRP_OK && cap->timezone_blob && cap->timezone_len) {
+        psrp_value_t tz;
+        psrp_value_init(&tz);
+        rc = psrp_value_set_bytes(&tz, cap->timezone_blob, cap->timezone_len);
+        if (rc == PSRP_OK) rc = psrp_object_add_extended(o, "TimeZone", &tz);
+        psrp_value_free(&tz);
+    }
     if (rc != PSRP_OK) { psrp_object_free(o); return rc; }
 
     psrp_value_init(&wrapper);

@@ -9,6 +9,7 @@
 #define PSRP_MESSAGES_H
 
 #include "psrp/psrp_object.h"
+#include "psrp/psrp_timezone.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -59,6 +60,11 @@ typedef struct psrp_session_capability {
     char ps_version[32];             /* PSVersion */
     char protocol_version[32];       /* protocolversion */
     char serialization_version[32];  /* SerializationVersion */
+    /* Optional TimeZone (2.2.3.10), an MS-NRBF blob. The spec says SHOULD, and
+     * omitting it is what a client with no time zone to report does. Not
+     * owned; psrp_session_capability_defaults leaves it empty. */
+    const uint8_t *timezone_blob;
+    size_t timezone_len;
 } psrp_session_capability_t;
 
 /* Fills in the versions this implementation offers. */

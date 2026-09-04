@@ -100,6 +100,12 @@ const psrp_session_capability_t *psrp_session_server_capability(
 
 /* Builds SESSION_CAPABILITY + INIT_RUNSPACEPOOL, fragmented and ready to be
  * carried in the transport's shell-create request. */
+/* Reports the machine's time zone in SESSION_CAPABILITY (2.2.3.10). The spec
+ * says a client SHOULD send it; a session does not by default, because doing
+ * so tells the server where the client is and that should be a choice. Must be
+ * called before psrp_session_open_payload. */
+psrp_result_t psrp_session_send_timezone(psrp_session_t *s);
+
 psrp_result_t psrp_session_open_payload(psrp_session_t *s, psrp_buffer_t *out);
 
 /* Builds CREATE_PIPELINE for `count` commands and allocates the pipeline id.

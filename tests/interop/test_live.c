@@ -128,6 +128,14 @@ int main(void)
 
     /* 1. Open the RunspacePool: SESSION_CAPABILITY + INIT_RUNSPACEPOOL ride
      *    along in the shell Create's creationXml. */
+    /* Report the machine's time zone, so a real server gets to validate the
+     * MS-NRBF blob rather than only our own parser doing so. */
+    if (psrp_session_send_timezone(s) != PSRP_OK) {
+        printf("could not read the local time zone\n");
+        psrp_session_free(s);
+        return 1;
+    }
+
     if (psrp_session_open_payload(s, &payload) != PSRP_OK) {
         printf("FAIL: open_payload\n"); goto done;
     }
