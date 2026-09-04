@@ -195,7 +195,35 @@ int main(void)
         goto done;
     }
 
-    /* 5. Disconnect and come back (3.1.4.9, 3.1.4.10.2). The shell keeps
+    /* 5. Enumerate the server's shells (3.1.4.10.1). Our own pool is open, so
+     *    it must be in the list, and its ShellId must be our pool id: that is
+     *    the identifier another client would use to connect to it. */
+    {
+        psrp_shell_info_t *shells = NULL;
+        size_t shell_count = 0, k;
+        bool found = false;
+
+        if (psrp_wsman_enumerate_shells(&cfg, &shells, &shell_count)
+            != PSRP_OK) {
+            printf("FAIL: enumerate shells\n");
+            goto done;
+        }
+        for (k = 0; k < shell_count; k++) {
+            if (psrp_guid_equal(&shells[k].shell_id, psrp_session_pool_id(s))) {
+                found = true;
+                printf("enumerated our pool: state %s\n",
+                       shells[k].state ? shells[k].state : "<none>");
+            }
+        }
+        printf("server reports %zu shell(s)\n", shell_count);
+        psrp_shell_info_free_all(shells, shell_count);
+        if (!found) {
+            printf("FAIL: our own pool was not in the enumeration\n");
+            goto done;
+        }
+    }
+
+    /* 6. Disconnect and come back (3.1.4.9, 3.1.4.10.2). The shell keeps
      *    running on the server in between, so this is the one part of the
      *    protocol that cannot be checked without a real server. */
     printf("disconnecting\n");
@@ -230,7 +258,7 @@ int main(void)
         goto done;
     }
 
-    /* 6. The pool still works: run something else through it. */
+    /* 7. The pool still works: run something else through it. */
     psrp_command_free(cmd);
     cmd = psrp_command_new("2 + 2", true);
     if (!cmd) { printf("FAIL: command_new\n"); goto done; }
@@ -255,7 +283,7 @@ int main(void)
             printf("output: \"%s\"\n", (const char *)out_text.data);
     }
 
-    /* 7. Close the pool explicitly (wxf:Delete, 3.1.4.2) so the server tears
+    /* 8. Close the pool explicitly (wxf:Delete, 3.1.4.2) so the server tears
      *    the shell down now rather than waiting for an idle timeout. */
     if (psrp_transport_close_shell(t) != PSRP_OK) {
         printf("FAIL: close shell: %s\n", psrp_transport_last_error(t));

@@ -50,6 +50,7 @@ add_library(psrp STATIC
   src/state/session.c
   src/proto/messages_pool.c
   src/transport/transport_wsman.c
+  src/transport/enumerate_wsman.c
   src/state/host.c
   src/crypto/crypto_cng.c
   src/state/hostdata.c
@@ -70,7 +71,9 @@ target_link_libraries(psrp PRIVATE psrp_flags)
 
 # XmlLite is the XML backend (Microsoft standard; ships with Windows and is
 # present in both the Windows SDK and llvm-mingw, so nothing is vendored).
-target_link_libraries(psrp PUBLIC xmllite bcrypt WsmSvc)
+# ole32/oleaut32 are for the WSMan automation interface, which is the only
+# way to enumerate shells (3.1.4.10.1); the flat WSMan C API has no equivalent.
+target_link_libraries(psrp PUBLIC xmllite bcrypt WsmSvc ole32 oleaut32)
 
 if(PSRP_BUILD_TESTS)
   enable_testing()

@@ -38,6 +38,7 @@ psrp_add_unit_test(test_hostvalues unit/test_hostvalues.c)
 psrp_add_unit_test(test_hostparams unit/test_hostparams.c)
 psrp_add_unit_test(test_timezone unit/test_timezone.c)
 psrp_add_unit_test(test_invocation unit/test_invocation.c)
+psrp_add_unit_test(test_enumerate unit/test_enumerate.c)
 
 # Live interop test. Labelled so it can be selected or excluded; it skips
 # itself unless PSRP_INTEROP=1, so the default run needs no WinRM.

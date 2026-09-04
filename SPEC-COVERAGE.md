@@ -10,14 +10,14 @@ This file is the definition of "full spec coverage". Update it in the same commi
 
 ## Status: complete
 
-All 230 client-side rows are `done`. The 37 remaining rows are the server
+All 231 client-side rows are `done`. The 37 remaining rows are the server
 sections, excluded by scope. Nothing is `todo`, `wip` or `deferred`.
 
 Complete means every section is implemented and has tests. It does not mean
 every reading of the spec went unquestioned: three places where the text and
 real PowerShell disagree are implemented the way the servers behave and
 recorded as deliberate divergences in TODO.md (PSRP-08, PSRP-11, PSRP-13).
-Four more entries there are genuine limits rather than divergences.
+The two entries left beyond those exist only to support a non-Windows port.
 
 ### Infrastructure (no spec section)
 
@@ -230,6 +230,7 @@ Four more entries there are genuine limits rather than divergences.
 | 3.1.4.8 | Initiating a Session Key Exchange | done | done | public key export + encrypted session key import |
 | 3.1.4.9 | Disconnecting from a RunspacePool | done | done | pool and pipelines to Disconnected; live-verified |
 | 3.1.4.10 | Connecting to a RunspacePool | done | done | both the previous-session and new-session paths |
+| 3.1.4.10.1 | Discovering Disconnected RunspacePools and Associated Pipelines on a Server | done | done | wxf:Enumerate over the shell URI, via the WSMan automation interface |
 | 3.1.4.10.2 | Connecting to a RunspacePool from a Previous Client Session | done | done | reconnect; live-verified |
 | 3.1.4.10.3 | Connecting to a RunspacePool from a New Client Session | done | done | connect payload and wxf:Connect; discovery is TODO PSRP-12 |
 | 3.1.5 | Message Processing Events and Sequencing Rules | done | done | send/receive rules, WSMan binding, and sequencing verified live |

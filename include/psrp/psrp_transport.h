@@ -109,6 +109,41 @@ psrp_result_t psrp_transport_connect(psrp_transport_t *t,
 /* True while the shell is disconnected. */
 bool psrp_transport_is_disconnected(const psrp_transport_t *t);
 
+/* ---------------- discovering RunspacePools (3.1.4.10.1) --------------- */
+/*
+ * Connecting to a pool this client did not create needs that pool's
+ * identifier first. Each RunspacePool is a WSMan shell, so enumerating the
+ * server's shells lists them; the ShellId is the pool id, and it is what
+ * psrp_session_adopt_pool takes.
+ *
+ * This goes through the WSMan automation interface rather than the flat C API
+ * the rest of the transport uses, because that API covers shells and commands
+ * but not WS-Enumerate. It is the same interface `winrm enumerate` uses.
+ */
+typedef struct psrp_shell_info {
+    psrp_guid_t shell_id;   /* the RunspacePool id */
+    char *name;             /* owned; NULL when the server did not report it */
+    char *owner;
+    char *state;            /* e.g. "Connected" or "Disconnected" */
+    char *resource_uri;
+} psrp_shell_info_t;
+
+/* Lists the shells on a server. `cfg` supplies the endpoint and credentials;
+ * a NULL connection means the local machine. The caller frees the result with
+ * psrp_shell_info_free_all. An empty list is PSRP_OK with count 0. */
+psrp_result_t psrp_wsman_enumerate_shells(const psrp_wsman_config_t *cfg,
+                                          psrp_shell_info_t **out,
+                                          size_t *count);
+
+void psrp_shell_info_free(psrp_shell_info_t *s);
+void psrp_shell_info_free_all(psrp_shell_info_t *list, size_t count);
+
+/* Parses one shell element from an enumeration result. Exposed so the parsing
+ * can be tested without a server; a shell carrying no ShellId is rejected,
+ * since it could not be connected to anyway. */
+psrp_result_t psrp_wsman_parse_shell(const void *xml, size_t n,
+                                     psrp_shell_info_t *out);
+
 /* True once the remote command has reported it is done. */
 bool psrp_transport_command_done(const psrp_transport_t *t);
 
