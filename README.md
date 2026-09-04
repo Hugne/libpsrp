@@ -3,8 +3,13 @@
 A C implementation of the PowerShell Remoting Protocol ([MS-PSRP]), client
 side, as a static library with a sans-IO core and a pluggable transport.
 
+Every client-side section of the specification is implemented and tested. See
+`SPEC-COVERAGE.md` for the per-section status and `TODO.md` for the handful of
+places where the spec and real PowerShell disagree.
+
 **It works against real PowerShell.** The interop test opens a RunspacePool on
-a live WinRM endpoint, runs a pipeline, and reads the output back:
+a live WinRM endpoint, runs a pipeline, disconnects, reconnects, and runs
+another pipeline through the same pool:
 
 ```
     pool -> Opened
@@ -12,6 +17,12 @@ a live WinRM endpoint, runs a pipeline, and reads the output back:
     running $env:COMPUTERNAME
     pipeline -> Completed
     output: "CLAUDE"
+    disconnecting
+    reconnecting
+    running 2 + 2 on the reconnected pool
+    pipeline -> Completed
+    output: "4"
+    shell closed
 ```
 
 ## Layout

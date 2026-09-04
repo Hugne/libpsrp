@@ -8,6 +8,17 @@ This file is the definition of "full spec coverage". Update it in the same commi
 
 **Scope: client side only.** Server sections (3.2) are marked `n/a` by design.
 
+## Status: complete
+
+All 230 client-side rows are `done`. The 37 remaining rows are the server
+sections, excluded by scope. Nothing is `todo`, `wip` or `deferred`.
+
+Complete means every section is implemented and has tests. It does not mean
+every reading of the spec went unquestioned: three places where the text and
+real PowerShell disagree are implemented the way the servers behave and
+recorded as deliberate divergences in TODO.md (PSRP-08, PSRP-11, PSRP-13).
+Four more entries there are genuine limits rather than divergences.
+
 ### Infrastructure (no spec section)
 
 | Component | Impl | Tests | Notes |
@@ -95,7 +106,7 @@ This file is the definition of "full spec coverage". Update it in the same commi
 | 2.2.3.20 | Wildcard | done | done | a String; backtick escapes are the caller's to write |
 | 2.2.3.21 | CommandMetadataCount | done | done | parse Count |
 | 2.2.3.22 | CommandMetadata | done | done | parse name, namespace, help uri, type, parameter names |
-| 2.2.3.23 | ParameterMetadata | wip | wip | parameter names surfaced; per-parameter detail deferred (TODO PSRP-10) |
+| 2.2.3.23 | ParameterMetadata | done | done | type, aliases, switch and dynamic flags, index-aligned with the names |
 | 2.2.3.24 | ArgumentList | done | done | optional on GET_COMMAND_METADATA; must be a list |
 | 2.2.3.25 | PSCredential | done | done | adapted properties, required type names, SecureString password |
 | 2.2.3.26 | KeyInfo | done | done | extended properties; build + read |

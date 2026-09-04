@@ -342,6 +342,123 @@ PSRP_TEST(get_command_metadata_rejects_a_non_list_argument_list)
     psrp_value_free(&args);
 }
 
+/* ------------------------------------------------- 2.2.3.23 ------------ */
+
+/* A CommandMetadata whose Parameters dictionary holds real ParameterMetadata
+ * objects, the way a server answering GET_COMMAND_METADATA sends them. */
+static const char kWithParams[] =
+    "<Obj RefId=\"0\"><MS>"
+    "<S N=\"Name\">Get-Thing</S>"
+    "<Obj N=\"Parameters\" RefId=\"1\"><DCT>"
+    "<En><S N=\"Key\">Path</S>"
+    "  <Obj N=\"Value\" RefId=\"2\"><TN RefId=\"0\">"
+    "  <T>System.Management.Automation.ParameterMetadata</T>"
+    "  <T>System.Object</T></TN><MS>"
+    "  <S N=\"Name\">Path</S>"
+    "  <S N=\"ParameterType\">System.String</S>"
+    "  <Obj N=\"Aliases\" RefId=\"3\"><LST><S>p</S><S>FilePath</S></LST></Obj>"
+    "  <B N=\"SwitchParameter\">false</B>"
+    "  <B N=\"IsDynamic\">false</B>"
+    "  </MS></Obj></En>"
+    "<En><S N=\"Key\">Force</S>"
+    "  <Obj N=\"Value\" RefId=\"4\"><MS>"
+    "  <S N=\"Name\">Force</S>"
+    "  <S N=\"ParameterType\">System.Management.Automation.SwitchParameter</S>"
+    "  <B N=\"SwitchParameter\">true</B>"
+    "  <B N=\"IsDynamic\">true</B>"
+    "  </MS></Obj></En>"
+    "</DCT></Obj></MS></Obj>";
+
+PSRP_TEST(parameter_metadata_is_unpacked)
+{
+    psrp_command_metadata_t m;
+
+    ASSERT_OK(psrp_parse_command_metadata(kWithParams, sizeof kWithParams - 1,
+                                          &m));
+    ASSERT_EQ_STR(m.name, "Get-Thing");
+    ASSERT_EQ_SZ(m.parameter_count, 2u);
+    ASSERT_NOT_NULL(m.parameters);
+
+    /* The names array and the metadata array are index-aligned. */
+    ASSERT_EQ_STR(m.parameter_names[0], "Path");
+    ASSERT_EQ_STR(m.parameters[0].name, "Path");
+    ASSERT_EQ_STR(m.parameters[0].parameter_type, "System.String");
+    ASSERT_EQ_SZ(m.parameters[0].alias_count, 2u);
+    ASSERT_EQ_STR(m.parameters[0].aliases[0], "p");
+    ASSERT_EQ_STR(m.parameters[0].aliases[1], "FilePath");
+    ASSERT_FALSE(m.parameters[0].is_switch);
+    ASSERT_FALSE(m.parameters[0].is_dynamic);
+
+    ASSERT_EQ_STR(m.parameter_names[1], "Force");
+    ASSERT_EQ_STR(m.parameters[1].name, "Force");
+    ASSERT_TRUE(m.parameters[1].is_switch);
+    ASSERT_TRUE(m.parameters[1].is_dynamic);
+    ASSERT_EQ_SZ(m.parameters[1].alias_count, 0u);
+
+    psrp_command_metadata_free(&m);
+}
+
+PSRP_TEST(switch_parameter_is_derived_when_the_flag_is_absent)
+{
+    /* 2.2.3.23 defines SwitchParameter as exactly the type-name comparison, so
+     * a server that omits the property has withheld nothing. */
+    static const char xml[] =
+        "<Obj RefId=\"0\"><MS><S N=\"Name\">Test-It</S>"
+        "<Obj N=\"Parameters\" RefId=\"1\"><DCT>"
+        "<En><S N=\"Key\">Quiet</S><Obj N=\"Value\" RefId=\"2\"><MS>"
+        "<S N=\"ParameterType\">System.Management.Automation.SwitchParameter</S>"
+        "</MS></Obj></En>"
+        "</DCT></Obj></MS></Obj>";
+    psrp_command_metadata_t m;
+
+    ASSERT_OK(psrp_parse_command_metadata(xml, sizeof xml - 1, &m));
+    ASSERT_EQ_SZ(m.parameter_count, 1u);
+    ASSERT_TRUE(m.parameters[0].is_switch);
+    /* With no Name of its own the dictionary key stands in. */
+    ASSERT_EQ_STR(m.parameters[0].name, "Quiet");
+    psrp_command_metadata_free(&m);
+}
+
+PSRP_TEST(an_unreadable_parameter_keeps_the_arrays_aligned)
+{
+    /* One odd parameter must not cost the caller the others, and must not
+     * shift the metadata array out of step with the names array. */
+    static const char xml[] =
+        "<Obj RefId=\"0\"><MS><S N=\"Name\">Get-Thing</S>"
+        "<Obj N=\"Parameters\" RefId=\"1\"><DCT>"
+        "<En><S N=\"Key\">Good</S><Obj N=\"Value\" RefId=\"2\"><MS>"
+        "<S N=\"ParameterType\">System.Int32</S></MS></Obj></En>"
+        "<En><S N=\"Key\">Odd</S><Nil N=\"Value\" /></En>"
+        "<En><S N=\"Key\">AlsoGood</S><Obj N=\"Value\" RefId=\"3\"><MS>"
+        "<S N=\"ParameterType\">System.String</S></MS></Obj></En>"
+        "</DCT></Obj></MS></Obj>";
+    psrp_command_metadata_t m;
+
+    ASSERT_OK(psrp_parse_command_metadata(xml, sizeof xml - 1, &m));
+    ASSERT_EQ_SZ(m.parameter_count, 3u);
+    ASSERT_EQ_STR(m.parameter_names[1], "Odd");
+    ASSERT_EQ_STR(m.parameters[1].name, "Odd");
+    ASSERT_NULL(m.parameters[1].parameter_type);
+    ASSERT_EQ_STR(m.parameter_names[2], "AlsoGood");
+    ASSERT_EQ_STR(m.parameters[2].parameter_type, "System.String");
+    psrp_command_metadata_free(&m);
+}
+
+PSRP_TEST(a_command_with_no_parameters_has_no_arrays)
+{
+    static const char xml[] =
+        "<Obj RefId=\"0\"><MS><S N=\"Name\">Clear-Host</S></MS></Obj>";
+    psrp_command_metadata_t m;
+
+    ASSERT_OK(psrp_parse_command_metadata(xml, sizeof xml - 1, &m));
+    ASSERT_EQ_SZ(m.parameter_count, 0u);
+    ASSERT_NULL(m.parameters);
+    ASSERT_NULL(m.parameter_names);
+    psrp_command_metadata_free(&m);
+    /* Freeing twice must stay safe now that there is more to release. */
+    psrp_command_metadata_free(&m);
+}
+
 static const psrp_test_case_t cases[] = {
     PSRP_TEST_CASE(command_type_names),
     PSRP_TEST_CASE(get_command_metadata_with_patterns),
@@ -355,6 +472,10 @@ static const psrp_test_case_t cases[] = {
     PSRP_TEST_CASE(command_metadata_parses_spec_example),
     PSRP_TEST_CASE(command_metadata_tolerates_null_help_uri),
     PSRP_TEST_CASE(command_metadata_requires_a_name),
+    PSRP_TEST_CASE(parameter_metadata_is_unpacked),
+    PSRP_TEST_CASE(switch_parameter_is_derived_when_the_flag_is_absent),
+    PSRP_TEST_CASE(an_unreadable_parameter_keeps_the_arrays_aligned),
+    PSRP_TEST_CASE(a_command_with_no_parameters_has_no_arrays),
     PSRP_TEST_CASE(user_event_parses),
     PSRP_TEST_CASE(user_event_tolerates_null_computer_name),
     PSRP_TEST_CASE(user_event_reaches_the_session_as_an_event),

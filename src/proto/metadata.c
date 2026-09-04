@@ -216,6 +216,64 @@ psrp_result_t psrp_parse_command_metadata_count(const void *xml, size_t n,
     return PSRP_OK;
 }
 
+/* 2.2.3.23. `fallback_name` is the dictionary key, used when the metadata
+ * object does not carry a Name of its own. Returns PSRP_ERR_NOMEM only; a
+ * malformed parameter object yields a name-only entry rather than failing the
+ * whole command, since one odd parameter should not cost the caller the other
+ * fifty. */
+static psrp_result_t read_parameter(const psrp_value_t *v,
+                                    const char *fallback_name,
+                                    psrp_parameter_metadata_t *out)
+{
+    const psrp_object_t *o;
+    const psrp_value_t *aliases, *flag;
+    size_t i, count;
+
+    memset(out, 0, sizeof *out);
+    out->name = dup_n(fallback_name, strlen(fallback_name));
+    if (!out->name) return PSRP_ERR_NOMEM;
+
+    if (!v || v->kind != PSRP_VAL_OBJECT) return PSRP_OK;
+    o = v->as.obj;
+
+    {
+        char *name = text_prop(o, "Name");
+        if (name) { free(out->name); out->name = name; }
+    }
+    out->parameter_type = text_prop(o, "ParameterType");
+
+    flag = psrp_object_find(o, "SwitchParameter");
+    if (flag && flag->kind == PSRP_VAL_BOOL) {
+        out->is_switch = flag->as.b;
+    } else if (out->parameter_type) {
+        /* The spec defines SwitchParameter as exactly this comparison, so a
+         * server that omits the property has not withheld anything. */
+        out->is_switch = strcmp(out->parameter_type,
+            "System.Management.Automation.SwitchParameter") == 0;
+    }
+
+    flag = psrp_object_find(o, "IsDynamic");
+    out->is_dynamic = flag && flag->kind == PSRP_VAL_BOOL && flag->as.b;
+
+    aliases = psrp_object_find(o, "Aliases");
+    if (aliases && aliases->kind == PSRP_VAL_OBJECT) {
+        count = psrp_object_item_count(aliases->as.obj);
+        if (count) {
+            out->aliases = (char **)calloc(count, sizeof *out->aliases);
+            if (!out->aliases) return PSRP_ERR_NOMEM;
+            for (i = 0; i < count; i++) {
+                const psrp_value_t *a = psrp_object_item(aliases->as.obj, i);
+                if (!a || a->kind != PSRP_VAL_STRING) continue;
+                out->aliases[out->alias_count] =
+                    dup_n(a->as.text.ptr, a->as.text.len);
+                if (!out->aliases[out->alias_count]) return PSRP_ERR_NOMEM;
+                out->alias_count++;
+            }
+        }
+    }
+    return PSRP_OK;
+}
+
 psrp_result_t psrp_parse_command_metadata(const void *xml, size_t n,
                                           psrp_command_metadata_t *out)
 {
@@ -244,7 +302,9 @@ psrp_result_t psrp_parse_command_metadata(const void *xml, size_t n,
         size_t i, kept = 0;
         if (count) {
             out->parameter_names = (char **)calloc(count, sizeof *out->parameter_names);
-            if (!out->parameter_names) {
+            out->parameters = (psrp_parameter_metadata_t *)
+                calloc(count, sizeof *out->parameters);
+            if (!out->parameter_names || !out->parameters) {
                 psrp_value_free(&root);
                 psrp_command_metadata_free(out);
                 return PSRP_ERR_NOMEM;
@@ -255,6 +315,16 @@ psrp_result_t psrp_parse_command_metadata(const void *xml, size_t n,
                 out->parameter_names[kept] = dup_n(e->key.as.text.ptr,
                                                    e->key.as.text.len);
                 if (!out->parameter_names[kept]) {
+                    psrp_value_free(&root);
+                    psrp_command_metadata_free(out);
+                    return PSRP_ERR_NOMEM;
+                }
+                /* The value is a 2.2.3.23 ParameterMetadata. A parameter whose
+                 * object is missing or unreadable still gets an entry carrying
+                 * its name, so the two arrays stay index-aligned; a caller
+                 * walking them in parallel must not have to check. */
+                if (read_parameter(&e->value, out->parameter_names[kept],
+                                   &out->parameters[kept]) != PSRP_OK) {
                     psrp_value_free(&root);
                     psrp_command_metadata_free(out);
                     return PSRP_ERR_NOMEM;
@@ -280,8 +350,19 @@ void psrp_command_metadata_free(psrp_command_metadata_t *m)
     free(m->name);
     free(m->command_namespace);
     free(m->help_uri);
-    for (i = 0; i < m->parameter_count; i++) free(m->parameter_names[i]);
+    for (i = 0; i < m->parameter_count; i++) {
+        size_t j;
+        free(m->parameter_names[i]);
+        if (m->parameters) {
+            free(m->parameters[i].name);
+            free(m->parameters[i].parameter_type);
+            for (j = 0; j < m->parameters[i].alias_count; j++)
+                free(m->parameters[i].aliases[j]);
+            free(m->parameters[i].aliases);
+        }
+    }
     free(m->parameter_names);
+    free(m->parameters);
     memset(m, 0, sizeof *m);
     m->command_type = -1;
 }

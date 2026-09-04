@@ -56,6 +56,16 @@ psrp_result_t psrp_build_get_command_metadata(const char *const *name_patterns,
 psrp_result_t psrp_parse_command_metadata_count(const void *xml, size_t n,
                                                 int32_t *count);
 
+/* 2.2.3.23 ParameterMetadata, one per parameter a command accepts. */
+typedef struct psrp_parameter_metadata {
+    char *name;            /* a non-empty String per the spec */
+    char *parameter_type;  /* a .NET type name; NULL when absent */
+    char **aliases;        /* alternative names */
+    size_t alias_count;
+    bool is_switch;        /* SwitchParameter */
+    bool is_dynamic;       /* IsDynamic */
+} psrp_parameter_metadata_t;
+
 /* 2.2.3.22 CommandMetadata, one per command. */
 typedef struct psrp_command_metadata {
     char *name;
@@ -64,6 +74,10 @@ typedef struct psrp_command_metadata {
     int32_t command_type;      /* -1 when absent */
     char **parameter_names;    /* keys of the Parameters dictionary */
     size_t parameter_count;
+    /* One entry per parameter_names entry, in the same order. A parameter
+     * whose metadata object was missing or unreadable still gets an entry,
+     * with only its name filled in, so the two arrays stay aligned. */
+    psrp_parameter_metadata_t *parameters;
 } psrp_command_metadata_t;
 
 psrp_result_t psrp_parse_command_metadata(const void *xml, size_t n,

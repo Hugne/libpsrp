@@ -3,6 +3,29 @@
 Every deferral, approximation, shortcut, or open question found while
 implementing goes here. Nothing is dropped silently.
 
+## Where things stand
+
+Every client-side section of MS-PSRP is implemented and tested; see
+`SPEC-COVERAGE.md`. The entries still open below are not missing protocol
+work. They fall into three groups.
+
+**Deliberate divergences from the spec text** (PSRP-08, PSRP-11, PSRP-13).
+Each is a place where following the letter of the specification would break
+against real PowerShell, or would lose information a caller needs. Each entry
+says what the spec asks, what is done instead, and why. They stay open because
+a divergence should keep being visible, not because anything is unfinished.
+
+**A genuine gap** (PSRP-12). Discovering another client's disconnected pools
+needs a wxf:Enumerate, and the Win32 WSMan client API exposes no enumeration
+entry point. A caller who obtains a pool identifier by other means can already
+connect to it, so only the discovery step is missing.
+
+**Out of scope for a Windows client** (PSRP-01, PSRP-03, PSRP-05). Xpress
+compression is optional and negotiated by WSMan; the other two exist only to
+support a non-Windows port, which would mean replacing both the transport and
+the XML backend. None of them affects correctness against a Windows server.
+They are recorded so the choice is visible rather than silently made.
+
 ## Rules
 
 - Each entry gets a stable id `PSRP-nn`. Code references it as `/* TODO(PSRP-nn) */`.
@@ -29,7 +52,7 @@ implementing goes here. Nothing is dropped silently.
 | PSRP-07 | HostInfo | 2.2.3.14 | Populated `_hostDefaultData` dictionary (colors, coordinates, sizes, window title) | Implemented: all ten required keys with their Color / Coordinates / Size / Int32 / String types. A null host still omits the dictionary entirely, which is what the spec's own null-host example shows. | closed |
 | PSRP-08 | Transport | 3.1.5.3.3 | rsp:Command is sent as a single space rather than empty | The spec says the Command element MUST be empty, but the Win32 WSMan client refuses an empty command line client-side (0x80338180) in both WSManRunShellCommand and the Ex form. A single space is the closest achievable and a real PowerShell endpoint accepts it, verified by the live interop test. Only a hand-rolled SOAP transport could send a truly empty element. | open |
 | PSRP-09 | Host calls | 2.2.6 | Typed decoding of host method parameters (mp) | Closed: the 2.2.6.1 encodings are implemented. Parameters are reachable by index, T/V wrappers unwrap to their value, plain values pass through unchanged as 2.2.6.1.1 requires, and arrays expose their flattened elements and dimension sizes. What remains undone is mapping each host *method* signature onto typed arguments, which is a job for whatever implements an interactive host, not for the protocol library. | closed |
-| PSRP-10 | Metadata | 2.2.3.23 | Full ParameterMetadata detail (type, aliases, switch flag, mandatory) | CommandMetadata surfaces the parameter *names*, which answers the usual question of what a command accepts. Unpacking each parameter's metadata object only matters for a client building tab completion or help, so it waits until something needs it. | open |
+| PSRP-10 | Metadata | 2.2.3.23 | Full ParameterMetadata detail (type, aliases, switch flag, mandatory) | Closed: each parameter's type name, aliases, switch flag and dynamic flag are read alongside its name, index-aligned with the names array so a caller can walk both together. A parameter whose metadata object is missing still gets an entry carrying its name, so one odd parameter does not cost the caller the rest. There is no Mandatory property in 2.2.3.23; it belongs to the parameter *set* metadata, which the spec does not define a wire type for. | closed |
 | PSRP-11 | Negotiation | 3.1.5.4.1.2 | Version table is not enforced literally | The spec's table requires protocolversion 2.1 or 2.2, PSVersion 2.0 and SerializationVersion 1.1.0.1. Two of those describe no server anyone runs: Windows PowerShell 5.1 announces PSVersion 5.1 and PowerShell 7 announces protocolversion 2.3. Enforcing the table literally would mark every modern server Broken. The check accepts protocolversion major 2 with minor 1 or above, still requires SerializationVersion 1.1.0.1 when present, and ignores PSVersion entirely. Recorded as a deliberate divergence rather than a gap. | open |
 | PSRP-12 | Discovery | 3.1.4.10.1 | Enumerating disconnected shells and commands on a server | Connecting to someone else's RunspacePool needs its ShellID first, which 3.1.4.10.1 gets with a wxf:Enumerate. The Win32 WSMan client API exposes no enumeration entry point, so this would need either a hand-rolled SOAP request or the caller supplying an identifier they already know. psrp_session_adopt_pool takes the identifier directly, so a caller who has one by other means can already connect; only the discovery step is missing. | open |
 | PSRP-13 | Error handling | 3.1.7 | An error marks the pool Broken rather than Closed | 3.1.7 says an error while processing a RunspacePool message closes that pool. This uses Broken. Closed everywhere else in the spec means an orderly shutdown, so reporting a failed pool as Closed would leave a caller who looks at the state unable to tell a decode error from a clean exit. Both states stop further processing identically under 3.1.5.1 rule 5, so nothing else changes. Recorded as a deliberate divergence. | open |
