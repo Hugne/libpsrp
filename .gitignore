@@ -7,4 +7,3 @@ out/
 *.ilk
 .cache/
 compile_commands.json
-build/asan/
