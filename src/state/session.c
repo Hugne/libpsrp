@@ -567,6 +567,7 @@ psrp_result_t psrp_session_open_payload(psrp_session_t *s, psrp_buffer_t *out)
 psrp_result_t psrp_session_pipeline_payload(psrp_session_t *s,
                                             psrp_command_t *const *commands,
                                             size_t count,
+                                            psrp_pipeline_input_t input,
                                             psrp_guid_t *pipeline_id_out,
                                             psrp_buffer_t *out)
 {
@@ -583,6 +584,11 @@ psrp_result_t psrp_session_pipeline_payload(psrp_session_t *s,
     if (rc != PSRP_OK) return rc;
 
     psrp_create_pipeline_defaults(&opts);
+    /* 2.2.2.10 NoInput. The defaults say "no input", which is right for the
+     * common case and wrong the moment a caller intends to send some: the
+     * server closes the input stream on receipt and everything later is
+     * discarded without complaint. */
+    opts.no_input = (input != PSRP_PIPELINE_EXPECT_INPUT);
     psrp_buffer_init(&body);
     rc = psrp_build_create_pipeline(&opts, commands, count, &body);
     if (rc == PSRP_OK)

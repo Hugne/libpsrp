@@ -107,7 +107,8 @@ static int one_cycle(psrp_transport_t *t, int run_pipeline)
         cmd = psrp_command_new("1", true);
         if (!cmd) goto done;
         psrp_buffer_reset(&payload);
-        if (psrp_session_pipeline_payload(s, &cmd, 1, &pid, &payload) != PSRP_OK)
+        if (psrp_session_pipeline_payload(s, &cmd, 1, PSRP_PIPELINE_NO_INPUT,
+                                          &pid, &payload) != PSRP_OK)
             goto done;
         if (psrp_transport_run_command(t, &pid, payload.data, payload.len)
             != PSRP_OK) {

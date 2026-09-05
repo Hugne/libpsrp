@@ -19,7 +19,8 @@
  *   ... psrp_session_receive(s, data, len);    // feed everything received
  *   while (psrp_session_next_event(s, &e) == PSRP_OK) { ... }
  *   // once the pool reports Opened:
- *   psrp_session_pipeline_payload(s, &cmd, 1, &pipeline_id, &buf);
+ *   psrp_session_pipeline_payload(s, &cmd, 1, PSRP_PIPELINE_NO_INPUT,
+ *                                 &pipeline_id, &buf);
  */
 #ifndef PSRP_SESSION_H
 #define PSRP_SESSION_H
@@ -145,13 +146,30 @@ psrp_result_t psrp_session_notify_fault(psrp_session_t *s, const char *reason);
 
 /* Builds CREATE_PIPELINE for `count` commands and allocates the pipeline id.
  * The bytes go in the transport's run-command request. */
+/* Whether a pipeline will be fed input.
+ *
+ * This has to be declared when the pipeline is created, not when input is
+ * sent: it becomes the NoInput property of CREATE_PIPELINE (2.2.2.10), and a
+ * server told NoInput=true closes the input stream immediately and discards
+ * anything that arrives afterwards. Getting it wrong is silent -- the input
+ * is simply ignored and the script sees an empty $input -- which is exactly
+ * how it went unnoticed until a test actually fed a live pipeline. */
+typedef enum psrp_pipeline_input {
+    PSRP_PIPELINE_NO_INPUT = 0,      /* nothing will be sent */
+    PSRP_PIPELINE_EXPECT_INPUT = 1   /* psrp_session_send_input will follow */
+} psrp_pipeline_input_t;
+
 psrp_result_t psrp_session_pipeline_payload(psrp_session_t *s,
                                             psrp_command_t *const *commands,
                                             size_t count,
+                                            psrp_pipeline_input_t input,
                                             psrp_guid_t *pipeline_id_out,
                                             psrp_buffer_t *out);
 
 /* Queues a PIPELINE_INPUT object for the given pipeline. */
+/* Sends one object as pipeline input. The pipeline must have been created
+ * with PSRP_PIPELINE_EXPECT_INPUT; otherwise the server has already closed
+ * the input stream and will discard this silently. */
 psrp_result_t psrp_session_send_input(psrp_session_t *s,
                                       const psrp_guid_t *pipeline_id,
                                       const psrp_value_t *value);

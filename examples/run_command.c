@@ -145,7 +145,8 @@ int main(int argc, char **argv)
     if (!cmd) goto done;
 
     psrp_buffer_reset(&payload);
-    if (psrp_session_pipeline_payload(s, &cmd, 1, &pipeline_id, &payload)
+    if (psrp_session_pipeline_payload(s, &cmd, 1, PSRP_PIPELINE_NO_INPUT,
+                                      &pipeline_id, &payload)
         != PSRP_OK) goto done;
     if (psrp_transport_run_command(t, &pipeline_id, payload.data, payload.len)
         != PSRP_OK) {

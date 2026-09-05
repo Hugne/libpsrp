@@ -168,7 +168,8 @@ int main(void)
     cmd = psrp_command_new("$env:COMPUTERNAME", true);
     if (!cmd) { printf("FAIL: command_new\n"); goto done; }
     psrp_buffer_reset(&payload);
-    if (psrp_session_pipeline_payload(s, &cmd, 1, &pipeline_id, &payload)
+    if (psrp_session_pipeline_payload(s, &cmd, 1, PSRP_PIPELINE_NO_INPUT,
+                                      &pipeline_id, &payload)
         != PSRP_OK) {
         printf("FAIL: pipeline_payload\n"); goto done;
     }
@@ -264,7 +265,8 @@ int main(void)
     if (!cmd) { printf("FAIL: command_new\n"); goto done; }
     psrp_buffer_reset(&payload);
     psrp_buffer_reset(&out_text);
-    if (psrp_session_pipeline_payload(s, &cmd, 1, &pipeline_id, &payload)
+    if (psrp_session_pipeline_payload(s, &cmd, 1, PSRP_PIPELINE_NO_INPUT,
+                                      &pipeline_id, &payload)
         != PSRP_OK) {
         printf("FAIL: pipeline_payload after reconnect\n"); goto done;
     }

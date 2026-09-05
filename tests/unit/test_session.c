@@ -161,7 +161,8 @@ static void start_pipeline(psrp_session_t *s, psrp_guid_t *pid)
     cmd = psrp_command_new("Get-Thing", true);
     ASSERT_NOT_NULL(cmd);
     psrp_buffer_init(&wire);
-    ASSERT_OK(psrp_session_pipeline_payload(s, &cmd, 1, pid, &wire));
+    ASSERT_OK(psrp_session_pipeline_payload(s, &cmd, 1, PSRP_PIPELINE_EXPECT_INPUT,
+                                            pid, &wire));
     psrp_buffer_free(&wire);
     psrp_command_free(cmd);
 }
@@ -334,7 +335,8 @@ PSRP_TEST(pipeline_payload_addresses_a_new_pipeline)
     ASSERT_NOT_NULL(cmd);
     open_pool(s);
 
-    ASSERT_OK(psrp_session_pipeline_payload(s, &cmd, 1, &pid, &wire));
+    ASSERT_OK(psrp_session_pipeline_payload(s, &cmd, 1, PSRP_PIPELINE_NO_INPUT,
+                                            &pid, &wire));
     ASSERT_FALSE(psrp_guid_is_empty(&pid));
 
     n = decode_all(&wire, msgs, bodies, 2);
@@ -346,7 +348,8 @@ PSRP_TEST(pipeline_payload_addresses_a_new_pipeline)
 
     /* Each pipeline gets its own id. */
     psrp_buffer_reset(&wire);
-    ASSERT_OK(psrp_session_pipeline_payload(s, &cmd, 1, &pid2, &wire));
+    ASSERT_OK(psrp_session_pipeline_payload(s, &cmd, 1, PSRP_PIPELINE_NO_INPUT,
+                                            &pid2, &wire));
     ASSERT_FALSE(psrp_guid_equal(&pid, &pid2));
 
     psrp_command_free(cmd);
@@ -361,7 +364,8 @@ PSRP_TEST(pipeline_payload_requires_commands)
     psrp_guid_t pid;
     ASSERT_NOT_NULL(s);
     psrp_buffer_init(&wire);
-    ASSERT_ERR(psrp_session_pipeline_payload(s, NULL, 0, &pid, &wire),
+    ASSERT_ERR(psrp_session_pipeline_payload(s, NULL, 0, PSRP_PIPELINE_NO_INPUT,
+                                             &pid, &wire),
                PSRP_ERR_INVALID_ARG);
     psrp_buffer_free(&wire);
     psrp_session_free(s);
@@ -554,7 +558,8 @@ PSRP_TEST(full_run_a_command_conversation)
     /* 3. Client runs a command. */
     cmd = psrp_command_new("$env:COMPUTERNAME", true);
     ASSERT_NOT_NULL(cmd);
-    ASSERT_OK(psrp_session_pipeline_payload(s, &cmd, 1, &pid, &cmd_wire));
+    ASSERT_OK(psrp_session_pipeline_payload(s, &cmd, 1, PSRP_PIPELINE_EXPECT_INPUT,
+                                            &pid, &cmd_wire));
 
     /* 4. Server streams output then the terminal state. */
     server_send(s, PSRP_MSG_PIPELINE_OUTPUT, &pid, "<S>CLAUDE</S>", 5);
@@ -1358,7 +1363,8 @@ PSRP_TEST(reconnect_does_not_revive_a_finished_pipeline)
         psrp_buffer_t wire;
         ASSERT_NOT_NULL(cmd);
         psrp_buffer_init(&wire);
-        ASSERT_OK(psrp_session_pipeline_payload(s, &cmd, 1, &live_pid, &wire));
+        ASSERT_OK(psrp_session_pipeline_payload(s, &cmd, 1, PSRP_PIPELINE_NO_INPUT,
+                                                &live_pid, &wire));
         psrp_buffer_free(&wire);
         psrp_command_free(cmd);
     }

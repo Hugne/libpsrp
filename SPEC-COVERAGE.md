@@ -36,6 +36,7 @@ The two entries left beyond those exist only to support a non-Windows port.
 | Thread-safety audit of the transport | done | done | every recv field checked against its lock; MSVC has no ThreadSanitizer, so this is by inspection |
 | Public header self-containment | done | done | one generated TU per header, in C and C++; a build-time check, verified to fail on a broken header |
 | Fresh-clone build | done | done | clone builds and tests green on both toolchains, with live interop and stress; nothing depends on an untracked file |
+| Live pipeline input | done | done | `tests/interop/test_input.c`; the input direction had never been run against a real server |
 | Worked example | done | done | `examples/run_command.c`, verified against a live server |
 | Differential testing vs psrpcore | done | done | both directions, 39 cases; corpus committed so ctest stays hermetic |
 
@@ -283,8 +284,8 @@ The two entries left beyond those exist only to support a non-Windows port.
 | 3.1.5.4.14 | GET_COMMAND_METADATA Message | done | done | builder plus both result parsers |
 | 3.1.5.4.15 | RUNSPACEPOOL_HOST_CALL Message | done | done | ci and method id surfaced with the parameters |
 | 3.1.5.4.16 | RUNSPACEPOOL_HOST_RESPONSE Message | done | done | quotes the call's ci; goes out on the pr stream |
-| 3.1.5.4.17 | PIPELINE_INPUT Message | done | done | refused unless the pipeline is Running |
-| 3.1.5.4.18 | END_OF_PIPELINE_INPUT Message | done | done | refused unless the pipeline is Running |
+| 3.1.5.4.17 | PIPELINE_INPUT Message | done | done | refused unless the pipeline is Running; live-verified, incl. a payload spanning fragments |
+| 3.1.5.4.18 | END_OF_PIPELINE_INPUT Message | done | done | refused unless the pipeline is Running; live-verified |
 | 3.1.5.4.19 | PIPELINE_OUTPUT Message | done | done | surfaced as an event carrying the object |
 | 3.1.5.4.20 | ERROR_RECORD Message | done | done | surfaced as an event |
 | 3.1.5.4.21 | PIPELINE_STATE Message | done | done | pool-targeted and unknown-pipeline messages ignored |
