@@ -60,6 +60,55 @@ target_include_directories(test_stress PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME interop.test_stress COMMAND test_stress)
 set_tests_properties(interop.test_stress PROPERTIES LABELS "interop" TIMEOUT 600)
 
+# Public header self-containment.
+#
+# Every header must compile on its own, without another one having been
+# included first. That property breaks the moment somebody uses a type without
+# including where it comes from, and it breaks for consumers rather than for
+# us, because our own translation units always include several headers
+# together and mask it.
+#
+# One translation unit is generated per header, including only that header.
+# They are compiled, not linked: a successful compile is the whole assertion,
+# so this is a build-time check rather than a ctest.
+file(GLOB PSRP_PUBLIC_HEADERS
+     RELATIVE ${CMAKE_SOURCE_DIR}/include/psrp
+     ${CMAKE_SOURCE_DIR}/include/psrp/*.h)
+
+set(PSRP_HEADER_TUS "")
+foreach(hdr ${PSRP_PUBLIC_HEADERS})
+  string(REPLACE ".h" "" base ${hdr})
+  set(tu ${CMAKE_CURRENT_BINARY_DIR}/hdrcheck_${base}.c)
+  file(GENERATE OUTPUT ${tu}
+       CONTENT "/* Generated. Asserts psrp/${hdr} is self-contained. */\n#include \"psrp/${hdr}\"\n")
+  list(APPEND PSRP_HEADER_TUS ${tu})
+endforeach()
+
+add_library(test_headers OBJECT ${PSRP_HEADER_TUS})
+target_link_libraries(test_headers PRIVATE psrp_flags)
+target_include_directories(test_headers PRIVATE ${CMAKE_SOURCE_DIR}/include)
+
+# The same check from C++, which is what the extern "C" guards are for. Those
+# guards are in every header and nothing else exercises them, so without this
+# they are decoration that might not work. Skipped when no C++ compiler is
+# configured, since requiring one to build a C library would be rude.
+include(CheckLanguage)
+check_language(CXX)
+if(CMAKE_CXX_COMPILER)
+  enable_language(CXX)
+  set(CMAKE_CXX_STANDARD 11)
+  set(PSRP_HEADER_TUS_CXX "")
+  foreach(hdr ${PSRP_PUBLIC_HEADERS})
+    string(REPLACE ".h" "" base ${hdr})
+    set(tu ${CMAKE_CURRENT_BINARY_DIR}/hdrcheck_${base}.cpp)
+    file(GENERATE OUTPUT ${tu}
+         CONTENT "/* Generated. Asserts psrp/${hdr} is usable from C++. */\n#include \"psrp/${hdr}\"\n")
+    list(APPEND PSRP_HEADER_TUS_CXX ${tu})
+  endforeach()
+  add_library(test_headers_cxx OBJECT ${PSRP_HEADER_TUS_CXX})
+  target_include_directories(test_headers_cxx PRIVATE ${CMAKE_SOURCE_DIR}/include)
+endif()
+
 # Fuzz target. Labelled separately so a soak run can select it:
 #   ctest -L fuzz
 # PSRP_FUZZ_ITERATIONS and PSRP_FUZZ_SEED steer it; the defaults keep the
