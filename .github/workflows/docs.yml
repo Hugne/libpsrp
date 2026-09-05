@@ -14,14 +14,29 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
+env:
+  DOXYGEN_VERSION: "1.14.0"
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install doxygen
-        run: sudo apt-get update && sudo apt-get install -y doxygen
+      # Pinned, not apt's. Whatever version the runner image happens to ship
+      # will differ from the one the Doxyfile and the comments were written
+      # against, and the versions disagree about what deserves a warning --
+      # 1.9.8 autolinks `::name()` inside a code span where 1.14 does not.
+      # Since warnings fail this build, that difference broke docs twice for
+      # reasons invisible locally. Pin it so local and CI agree.
+      - name: Install doxygen ${{ env.DOXYGEN_VERSION }}
+        run: |
+          v="${{ env.DOXYGEN_VERSION }}"
+          url="https://github.com/doxygen/doxygen/releases/download/Release_${v//./_}/doxygen-$v.linux.bin.tar.gz"
+          curl -fsSL "$url" -o doxygen.tar.gz
+          tar xzf doxygen.tar.gz
+          sudo cp "doxygen-$v/bin/doxygen" /usr/local/bin/
+          doxygen --version
 
       # Warnings are failures: an unescaped XML tag in a comment silently
       # mangles the rendered page rather than erroring. Config-level warnings

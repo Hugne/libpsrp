@@ -273,7 +273,7 @@ conversation against a scripted in-memory server.
 
 The project began as a lab that drove a local PowerShell over its stdin pipe,
 feeding statements one line at a time and pushing raw bytes at a cmdlet that
-read them back with `[Console]::OpenStandardInput()`. That mechanism has no
+read them back from the console's own standard-input handle. That mechanism has no
 PSRP equivalent -- there is no process whose stdin a client can write to -- but
 `tests/interop/test_binary_roundtrip.c` keeps what the lab was actually
 testing: the same 8..16384 byte sweep, the same deterministic payload, exact
