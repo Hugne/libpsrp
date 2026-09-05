@@ -35,6 +35,7 @@ The two entries left beyond those exist only to support a non-Windows port.
 | Lifecycle stress test | done | done | `tests/interop/test_stress.c`; caught a Receive cancellation race that a single pass could not (TODO PSRP-15) |
 | Thread-safety audit of the transport | done | done | every recv field checked against its lock; MSVC has no ThreadSanitizer, so this is by inspection |
 | Public header self-containment | done | done | one generated TU per header, in C and C++; a build-time check, verified to fail on a broken header |
+| Fresh-clone build | done | done | clone builds and tests green on both toolchains, with live interop and stress; nothing depends on an untracked file |
 | Worked example | done | done | `examples/run_command.c`, verified against a live server |
 | Differential testing vs psrpcore | done | done | both directions, 39 cases; corpus committed so ctest stays hermetic |
 
