@@ -260,6 +260,15 @@ payload functions, and reads results from an event queue. That makes the whole
 protocol testable without a network, and it is why the suite can drive a full
 conversation against a scripted in-memory server.
 
+The project began as a lab that drove a local PowerShell over its stdin pipe,
+feeding statements one line at a time and pushing raw bytes at a cmdlet that
+read them back with `[Console]::OpenStandardInput()`. That mechanism has no
+PSRP equivalent -- there is no process whose stdin a client can write to -- but
+`tests/interop/test_binary_roundtrip.c` keeps what the lab was actually
+testing: the same 8..16384 byte sweep, the same deterministic payload, exact
+length and SHA256 verified, and a liveness check afterwards. Only the route the
+bytes take changed, from a pipe to a CLIXML `<BA>` carried as pipeline input.
+
 Serialization behaviour is pinned against real PowerShell output rather than
 the spec's prose, which is looser than the implementation in several places.
 

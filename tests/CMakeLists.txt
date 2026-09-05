@@ -84,6 +84,14 @@ target_include_directories(test_client PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME interop.test_client COMMAND test_client)
 set_tests_properties(interop.test_client PROPERTIES LABELS "interop" TIMEOUT 600)
 
+# The original stdin lab's binary sweep, ported onto PSRP pipeline input.
+# Proves arbitrary bytes survive CLIXML <BA>, fragmentation and reassembly.
+add_executable(test_binary_roundtrip interop/test_binary_roundtrip.c)
+target_link_libraries(test_binary_roundtrip PRIVATE psrp psrp_flags bcrypt)
+target_include_directories(test_binary_roundtrip PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME interop.test_binary_roundtrip COMMAND test_binary_roundtrip)
+set_tests_properties(interop.test_binary_roundtrip PROPERTIES LABELS "interop" TIMEOUT 600)
+
 # Public header self-containment.
 #
 # Every header must compile on its own, without another one having been
