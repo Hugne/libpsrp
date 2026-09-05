@@ -23,7 +23,7 @@ constraint on any future move to protocol 2.4. PSRP-03 and PSRP-05 exist only to
 support a non-Windows port, which would mean replacing the transport and the XML
 backend together; neither affects correctness against a Windows server.
 
-## Rules## Rules
+## Rules
 
 - Each entry gets a stable id `PSRP-nn`. Code references it as `/* TODO(PSRP-nn) */`.
 - An entry records: what, which spec section, why deferred, and what "done" means.

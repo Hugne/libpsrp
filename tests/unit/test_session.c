@@ -1627,6 +1627,67 @@ PSRP_TEST(breaking_the_pool_fails_its_pipelines)
     psrp_session_free(s);
 }
 
+PSRP_TEST(a_server_reported_broken_pool_fails_its_pipelines)
+{
+    /* The ordinary way a pool dies is the server saying so, not a local
+     * decode fault, and it strands pipelines the same way. The ignore-guard
+     * in the RUNSPACEPOOL_STATE handler means notify_fault cannot clean up
+     * afterwards, so this path has to do it itself. */
+    psrp_session_t *s = psrp_session_new();
+    psrp_guid_t pid;
+    psrp_event_t e;
+    int32_t st = -1;
+    bool failed = false;
+
+    ASSERT_NOT_NULL(s);
+    start_pipeline(s, &pid);
+    ASSERT_EQ_SZ(psrp_session_pipeline_count(s), 1u);
+
+    server_send(s, PSRP_MSG_RUNSPACEPOOL_STATE, NULL,
+                pool_state_xml(PSRP_RUNSPACE_BROKEN), 0);
+
+    while (psrp_session_next_event(s, &e) == PSRP_OK) {
+        if (e.kind == PSRP_EVENT_PIPELINE_STATE &&
+            e.state == PSRP_INVOCATION_FAILED &&
+            psrp_guid_equal(&e.pipeline_id, &pid))
+            failed = true;
+        psrp_event_free(&e);
+    }
+    ASSERT_TRUE(failed);
+    ASSERT_EQ_SZ(psrp_session_pipeline_count(s), 0u);
+    ASSERT_ERR(psrp_session_pipeline_state(s, &pid, &st), PSRP_ERR_NOT_FOUND);
+
+    psrp_session_free(s);
+}
+
+PSRP_TEST(a_key_exchange_timeout_fails_its_pipelines)
+{
+    /* 3.1.6's expiry is a terminal transition like any other. */
+    psrp_session_t *s = psrp_session_new();
+    psrp_guid_t pid;
+    psrp_event_t e;
+    bool failed = false, timed_out = false;
+
+    ASSERT_NOT_NULL(s);
+    start_pipeline(s, &pid);
+    psrp_session_set_key_timeout(s, 1000);
+    ASSERT_OK(psrp_session_start_key_exchange(s));
+    ASSERT_OK(psrp_session_tick(s, 1000));
+
+    while (psrp_session_next_event(s, &e) == PSRP_OK) {
+        if (e.kind == PSRP_EVENT_PIPELINE_STATE &&
+            e.state == PSRP_INVOCATION_FAILED)
+            failed = true;
+        if (e.kind == PSRP_EVENT_SESSION_KEY_TIMEOUT) timed_out = true;
+        psrp_event_free(&e);
+    }
+    ASSERT_TRUE(timed_out);
+    ASSERT_TRUE(failed);
+    ASSERT_EQ_SZ(psrp_session_pipeline_count(s), 0u);
+
+    psrp_session_free(s);
+}
+
 PSRP_TEST(a_bad_pipeline_message_stops_only_that_pipeline)
 {
     /* 3.1.7 again: a pipeline message failing must not take the pool with it,
@@ -1794,6 +1855,8 @@ static const psrp_test_case_t cases[] = {
     PSRP_TEST_CASE(a_broken_pool_processes_nothing),
     PSRP_TEST_CASE(a_bad_pool_message_breaks_the_pool),
     PSRP_TEST_CASE(breaking_the_pool_fails_its_pipelines),
+    PSRP_TEST_CASE(a_server_reported_broken_pool_fails_its_pipelines),
+    PSRP_TEST_CASE(a_key_exchange_timeout_fails_its_pipelines),
     PSRP_TEST_CASE(a_bad_pipeline_message_stops_only_that_pipeline),
 };
 

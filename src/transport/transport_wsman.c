@@ -925,14 +925,22 @@ psrp_result_t psrp_transport_connect(psrp_transport_t *t,
         }
     }
 
-    op_destroy(&op);
     free(connect_xml);
     if (rc != PSRP_OK) {
         /* WSManConnectShell may have produced a handle even though the
          * operation as a whole failed -- the connectResponseXml checks above
          * run after a successful connect. Nulling it without closing would
          * strand the shell: psrp_transport_free would no longer see it, and
-         * the server would hold the pool until its idle timeout. */
+         * the server would hold the pool until its idle timeout.
+         *
+         * `op` is deliberately still alive here. On the timeout branch the
+         * connect completion is still outstanding and holds &op; closing the
+         * shell aborts it, and it will SetEvent(op.done) on its way out. Had
+         * op been destroyed first, that handle would be closed and the new
+         * event below would very likely be handed the same value, so the
+         * aborted connect would signal the close wait instead -- releasing it
+         * early and leaving the real close completion to write into a stack
+         * frame we had already returned from. */
         if (t->shell) {
             async_op_t close_op;
             WSMAN_SHELL_ASYNC close_async;
@@ -944,8 +952,10 @@ psrp_result_t psrp_transport_connect(psrp_transport_t *t,
             op_destroy(&close_op);
             t->shell = NULL;
         }
+        op_destroy(&op);
         return rc;
     }
+    op_destroy(&op);
 
     /* 3.1.4.10.3 step 6: a Receive follows the connect. The old code never
      * posted one, so even traffic that did arrive on the stream had nowhere
