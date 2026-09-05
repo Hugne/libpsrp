@@ -410,27 +410,3 @@ psrp_result_t psrp_parse_encrypted_session_key(psrp_crypto_t *c,
     psrp_value_free(&root);
     return rc;
 }
-
-psrp_result_t psrp_build_public_key_request(psrp_buffer_t *out)
-{
-    psrp_value_t v;
-    psrp_result_t rc;
-    if (!out) return PSRP_ERR_INVALID_ARG;
-    psrp_value_init(&v);
-    /* 2.2.2.5: a serialized empty string. */
-    rc = psrp_value_set_text(&v, PSRP_VAL_STRING, "", 0);
-    if (rc == PSRP_OK) rc = psrp_clixml_serialize(&v, out);
-    psrp_value_free(&v);
-    return rc;
-}
-
-bool psrp_is_public_key_request(const void *xml, size_t n)
-{
-    psrp_value_t v;
-    bool ok;
-    psrp_value_init(&v);
-    if (psrp_clixml_deserialize(xml, n, &v) != PSRP_OK) return false;
-    ok = (v.kind == PSRP_VAL_STRING && v.as.text.len == 0);
-    psrp_value_free(&v);
-    return ok;
-}

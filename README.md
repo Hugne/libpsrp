@@ -69,11 +69,16 @@ become conditional on what was negotiated. See TODO PSRP-28.
 
 ## Requirements
 
-Windows only, and deliberately so: the transport is the Win32 WSMan client
-(`WsmSvc`), XML is XmlLite, crypto is CNG (`bcrypt`), and shell enumeration
-uses the WSMan COM automation interface (`ole32`, `oleaut32`). Porting off
-Windows means replacing the transport and the XML backend together — see TODO
-PSRP-03 and PSRP-05.
+To talk to a server, Windows: the transport is the Win32 WSMan client
+(`WsmSvc`), crypto is CNG (`bcrypt`), and shell enumeration uses the WSMan COM
+automation interface (`ole32`, `oleaut32`).
+
+The protocol itself is platform-free and builds on Linux too, needing only
+libxml2. That build is a real subset rather than a stub: the state machine,
+CLIXML, fragmentation, messages and the object model compile and pass their
+tests in CI, while crypto and the transport are *absent* rather than faked, so
+`psrp_client` and the WSMan transport do not exist there at all. Enough to
+parse, build and reason about PSRP; not enough to connect. See TODO PSRP-03.
 
 Building needs CMake 3.20+, Ninja, and a C11 compiler; MSVC and clang are both
 kept green, with warnings as errors. The interop tests additionally need a

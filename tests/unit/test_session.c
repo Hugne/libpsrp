@@ -2,8 +2,15 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <windows.h>
-#include <bcrypt.h>
+/* The key-exchange cases play the server's half, which means RSA-encrypting
+ * a session key to the client's public key. That is CNG, and it is the only
+ * Windows dependency in this file; the other 47 cases are platform-free and
+ * run wherever the library builds. See TODO PSRP-03. */
+#ifdef _WIN32
+#  include <windows.h>
+#  include <bcrypt.h>
+#  define PSRP_TEST_HAVE_CRYPTO 1
+#endif
 
 #include "psrp/psrp.h"
 #include "psrp/psrp_session.h"
@@ -83,6 +90,8 @@ static void server_send(psrp_session_t *s, uint32_t type,
     psrp_buffer_free(&wire);
 }
 
+/* Only the key-exchange cases send a body with an explicit length. */
+#ifdef PSRP_TEST_HAVE_CRYPTO
 static void server_send_bytes(psrp_session_t *s, uint32_t type,
                               const psrp_guid_t *pid, const char *xml,
                               size_t xml_len)
@@ -106,6 +115,7 @@ static void server_send_bytes(psrp_session_t *s, uint32_t type,
     psrp_buffer_free(&body);
     psrp_buffer_free(&wire);
 }
+#endif /* PSRP_TEST_HAVE_CRYPTO */
 
 static const char *kCapabilityXml =
     "<Obj RefId=\"0\"><MS>"
@@ -963,6 +973,8 @@ PSRP_TEST(host_call_surfaces_its_call_id_and_method)
  * it lives here in the test rather than in the library.
  */
 
+#ifdef PSRP_TEST_HAVE_CRYPTO
+
 #define PSRP_TEST_MODULUS_BYTES 256
 #define PSRP_TEST_SESSION_KEY_BYTES 32
 
@@ -1220,6 +1232,9 @@ PSRP_TEST(session_key_timeout_breaks_the_pool)
     psrp_session_free(s);
 }
 
+#endif /* PSRP_TEST_HAVE_CRYPTO */
+
+#ifdef PSRP_TEST_HAVE_CRYPTO
 PSRP_TEST(ticking_without_an_exchange_does_nothing)
 {
     psrp_session_t *s = psrp_session_new();
@@ -1276,6 +1291,8 @@ PSRP_TEST(unrequested_session_key_is_refused)
 }
 
 /* -------------------- disconnect and reconnect (3.1.4.9, 3.1.4.10) ------ */
+
+#endif /* PSRP_TEST_HAVE_CRYPTO */
 
 PSRP_TEST(disconnect_takes_the_pool_and_its_pipelines_with_it)
 {
@@ -1660,6 +1677,7 @@ PSRP_TEST(a_server_reported_broken_pool_fails_its_pipelines)
     psrp_session_free(s);
 }
 
+#ifdef PSRP_TEST_HAVE_CRYPTO
 PSRP_TEST(a_key_exchange_timeout_fails_its_pipelines)
 {
     /* 3.1.6's expiry is a terminal transition like any other. */
@@ -1687,6 +1705,8 @@ PSRP_TEST(a_key_exchange_timeout_fails_its_pipelines)
 
     psrp_session_free(s);
 }
+
+#endif /* PSRP_TEST_HAVE_CRYPTO */
 
 PSRP_TEST(a_bad_pipeline_message_stops_only_that_pipeline)
 {
@@ -1833,6 +1853,7 @@ static const psrp_test_case_t cases[] = {
     PSRP_TEST_CASE(pipeline_state_aimed_at_the_pool_is_ignored),
     PSRP_TEST_CASE(pipeline_state_for_an_unknown_pipeline_is_ignored),
     PSRP_TEST_CASE(host_call_surfaces_its_call_id_and_method),
+#ifdef PSRP_TEST_HAVE_CRYPTO
     PSRP_TEST_CASE(key_exchange_requires_an_opened_pool),
     PSRP_TEST_CASE(key_exchange_sends_a_public_key),
     PSRP_TEST_CASE(key_exchange_is_ignored_while_already_running),
@@ -1840,8 +1861,13 @@ static const psrp_test_case_t cases[] = {
     PSRP_TEST_CASE(encrypted_session_key_installs_the_key_and_stops_the_timer),
     PSRP_TEST_CASE(session_key_round_trips_a_secure_string),
     PSRP_TEST_CASE(session_key_timeout_breaks_the_pool),
+#endif
+#ifdef PSRP_TEST_HAVE_CRYPTO
     PSRP_TEST_CASE(ticking_without_an_exchange_does_nothing),
+#endif
+#ifdef PSRP_TEST_HAVE_CRYPTO
     PSRP_TEST_CASE(unrequested_session_key_is_refused),
+#endif
     PSRP_TEST_CASE(disconnect_takes_the_pool_and_its_pipelines_with_it),
     PSRP_TEST_CASE(disconnect_is_ignored_unless_the_pool_is_opened),
     PSRP_TEST_CASE(reconnect_restores_the_pool_and_its_pipelines),
@@ -1856,7 +1882,9 @@ static const psrp_test_case_t cases[] = {
     PSRP_TEST_CASE(a_bad_pool_message_breaks_the_pool),
     PSRP_TEST_CASE(breaking_the_pool_fails_its_pipelines),
     PSRP_TEST_CASE(a_server_reported_broken_pool_fails_its_pipelines),
+#ifdef PSRP_TEST_HAVE_CRYPTO
     PSRP_TEST_CASE(a_key_exchange_timeout_fails_its_pipelines),
+#endif
     PSRP_TEST_CASE(a_bad_pipeline_message_stops_only_that_pipeline),
 };
 

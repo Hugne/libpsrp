@@ -31,16 +31,23 @@ psrp_add_unit_test(test_records unit/test_records.c)
 psrp_add_unit_test(test_session unit/test_session.c)
 psrp_add_unit_test(test_messages_pool unit/test_messages_pool.c)
 psrp_add_unit_test(test_host unit/test_host.c)
-psrp_add_unit_test(test_crypto unit/test_crypto.c)
 psrp_add_unit_test(test_hostdata unit/test_hostdata.c)
 psrp_add_unit_test(test_metadata unit/test_metadata.c)
 psrp_add_unit_test(test_hostvalues unit/test_hostvalues.c)
 psrp_add_unit_test(test_hostparams unit/test_hostparams.c)
 psrp_add_unit_test(test_timezone unit/test_timezone.c)
 psrp_add_unit_test(test_invocation unit/test_invocation.c)
-psrp_add_unit_test(test_enumerate unit/test_enumerate.c)
+
+# Windows-backed: crypto is CNG and shell enumeration is the WSMan COM API.
+# Both are behind seams with no POSIX implementation yet (TODO PSRP-03).
+if(PSRP_HAVE_TRANSPORT)
+  psrp_add_unit_test(test_crypto unit/test_crypto.c)
+  psrp_add_unit_test(test_enumerate unit/test_enumerate.c)
+endif()
 psrp_add_unit_test(test_differential unit/test_differential.c)
 target_include_directories(test_differential PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/unit)
+
+if(PSRP_HAVE_TRANSPORT)
 
 # Live interop test. Labelled so it can be selected or excluded; it skips
 # itself unless PSRP_INTEROP=1, so the default run needs no WinRM.
@@ -91,6 +98,8 @@ target_link_libraries(test_binary_roundtrip PRIVATE psrp psrp_flags bcrypt)
 target_include_directories(test_binary_roundtrip PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME interop.test_binary_roundtrip COMMAND test_binary_roundtrip)
 set_tests_properties(interop.test_binary_roundtrip PROPERTIES LABELS "interop" TIMEOUT 600)
+
+endif()  # PSRP_HAVE_TRANSPORT
 
 # Public header self-containment.
 #

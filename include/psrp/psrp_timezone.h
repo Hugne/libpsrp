@@ -42,7 +42,8 @@ typedef struct psrp_timezone {
     char daylight_name[PSRP_TIMEZONE_NAME_MAX];
 } psrp_timezone_t;
 
-/** Fills in the machine's current time zone. Windows only. */
+/** Fills in the machine's current time zone. On Windows the names are the
+ * full ones Windows reports; on POSIX they are tzname's abbreviations. */
 psrp_result_t psrp_timezone_current(psrp_timezone_t *out);
 
 /** Writes the MS-NRBF graph. The result is exactly the byte array that goes in

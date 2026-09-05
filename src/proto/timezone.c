@@ -23,6 +23,13 @@
  * BinaryFormatter produces, and the writer here matches it byte for byte.
  */
 
+/* tzset and tzname are POSIX but the `timezone` global is XSI, and the library
+ * builds as strict C11 with extensions off, so glibc needs telling before
+ * <time.h> is reached. _POSIX_C_SOURCE alone is not enough for `timezone`. */
+#if !defined(_WIN32) && !defined(_XOPEN_SOURCE)
+#  define _XOPEN_SOURCE 700
+#endif
+
 #include <string.h>
 
 #include "psrp/psrp_timezone.h"
@@ -30,6 +37,8 @@
 #ifdef _WIN32
 #  define WIN32_LEAN_AND_MEAN
 #  include <windows.h>
+#else
+#  include <time.h>
 #endif
 
 /* MS-NRBF record types, only the ones this graph uses. */
@@ -411,10 +420,35 @@ psrp_result_t psrp_timezone_current(psrp_timezone_t *out)
     return PSRP_OK;
 }
 #else
+/* POSIX. The names come from tzname rather than from a zone database, so they
+ * are the abbreviations the C library reports ("GMT", "CEST") where Windows
+ * gives full names ("W. Europe Standard Time"). Both are legal here: 2.2.3.10
+ * places no constraint on the strings, .NET fills them lazily, and the server
+ * does not parse them. The offset is the field that matters and it is exact.
+ */
 psrp_result_t psrp_timezone_current(psrp_timezone_t *out)
 {
     if (!out) return PSRP_ERR_INVALID_ARG;
     memset(out, 0, sizeof *out);
-    return PSRP_ERR_UNSUPPORTED;
+
+    tzset();
+
+    /* POSIX `timezone` is seconds WEST of UTC for standard time, so a zone
+     * ahead of UTC is negative; .NET's m_ticksOffset runs the other way.
+     * Hence the same negation as the Windows branch, and for the same reason:
+     * getting it backwards puts the remote session a day out near the date
+     * line. Standard time deliberately -- the field ignores daylight saving,
+     * which is why tm_gmtoff would be the wrong source. */
+    out->ticks_offset = -(int64_t)timezone * 10000000;
+
+    if (tzname[0] && tzname[0][0]) {
+        strncpy(out->standard_name, tzname[0], sizeof out->standard_name - 1);
+        out->has_standard_name = true;
+    }
+    if (tzname[1] && tzname[1][0]) {
+        strncpy(out->daylight_name, tzname[1], sizeof out->daylight_name - 1);
+        out->has_daylight_name = true;
+    }
+    return PSRP_OK;
 }
 #endif
