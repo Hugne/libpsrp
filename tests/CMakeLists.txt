@@ -50,6 +50,16 @@ target_include_directories(test_live PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME interop.test_live COMMAND test_live)
 set_tests_properties(interop.test_live PROPERTIES LABELS "interop" TIMEOUT 180)
 
+# Lifecycle stress test. Also interop-labelled and also opt-in: it needs a
+# WinRM service, and it is the only test that can see defects which only appear
+# across repeated cycles.
+add_executable(test_stress interop/test_stress.c)
+target_link_libraries(test_stress PRIVATE psrp psrp_flags)
+target_link_libraries(test_stress PRIVATE psapi)
+target_include_directories(test_stress PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME interop.test_stress COMMAND test_stress)
+set_tests_properties(interop.test_stress PROPERTIES LABELS "interop" TIMEOUT 600)
+
 # Fuzz target. Labelled separately so a soak run can select it:
 #   ctest -L fuzz
 # PSRP_FUZZ_ITERATIONS and PSRP_FUZZ_SEED steer it; the defaults keep the

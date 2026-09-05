@@ -71,7 +71,13 @@ typedef struct recv_ctx {
     psrp_buffer_t buf;      /* raw stdout bytes not yet drained */
     bool done;              /* command reported Done */
     bool op_ended;          /* a Receive operation finished; may need re-post */
-    bool expect_abort;      /* we cancelled a Receive on purpose */
+    /* Receives we cancelled ourselves and whose completion has not arrived
+     * yet. A count rather than a flag, because cancellation is asynchronous:
+     * the callback for a cancelled operation can land after the next one has
+     * already been posted, and a flag cleared in between turns our own
+     * cancellation into a reported fault. That was an intermittent failure
+     * roughly one run in a hundred cycles. */
+    unsigned pending_aborts;
     DWORD error;
     wchar_t detail[512];
 } recv_ctx_t;
@@ -91,8 +97,9 @@ static void CALLBACK receive_completion(PVOID ctx, DWORD flags,
     /* Retargeting Receive from the shell to a command means cancelling the
      * in-flight operation, and the cancellation reports itself as
      * ERROR_OPERATION_ABORTED. That is our own doing, not a server fault. */
-    if (error && error->code == ERROR_OPERATION_ABORTED && r->expect_abort) {
-        r->expect_abort = false;
+    if (error && error->code == ERROR_OPERATION_ABORTED &&
+        r->pending_aborts > 0) {
+        r->pending_aborts--;
         LeaveCriticalSection(&r->lock);
         SetEvent(r->data_ready);
         return;
@@ -219,7 +226,10 @@ static void cancel_receive(psrp_transport_t *t)
 {
     if (!t->recv_op) return;
     EnterCriticalSection(&t->recv.lock);
-    t->recv.expect_abort = true;
+    /* Counted, not flagged: the completion for this operation may arrive at
+     * any point afterwards, including after the replacement Receive has been
+     * posted, and it must still be recognised as ours when it does. */
+    t->recv.pending_aborts++;
     LeaveCriticalSection(&t->recv.lock);
     WSManCloseOperation(t->recv_op, 0);
     t->recv_op = NULL;
@@ -234,8 +244,11 @@ static void reset_receive(psrp_transport_t *t)
     psrp_buffer_reset(&t->recv.buf);
     t->recv.done = false;
     t->recv.op_ended = false;
-    t->recv.expect_abort = false;
     t->recv.error = 0;
+    /* pending_aborts is deliberately left alone. It tracks completions still
+     * to arrive for operations we already cancelled, and clearing it here is
+     * exactly the bug this replaced: the late completion would then look like
+     * a server fault. Only the callback that consumes one may decrement it. */
     LeaveCriticalSection(&t->recv.lock);
 }
 
@@ -667,9 +680,7 @@ psrp_result_t psrp_transport_reconnect(psrp_transport_t *t)
         /* 3.1.4.10.2 step 3: a reconnect must be followed by a Receive to
          * start data flowing again. The receive path re-arms itself, so
          * clearing the flag is all that is needed here. */
-        EnterCriticalSection(&t->recv.lock);
-        t->recv.expect_abort = false;
-        LeaveCriticalSection(&t->recv.lock);
+        reset_receive(t);
     }
     return rc;
 }

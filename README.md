@@ -64,6 +64,18 @@ we parse (catching an over-strict reader), and we serialize and psrpcore parses
 (catching a writer only our own reader would accept). Direction A is baked into
 a committed corpus so `ctest` needs neither Python nor psrpcore.
 
+Some defects only appear across repetition, so there is a lifecycle stress
+test alongside the interop one:
+
+```
+PSRP_INTEROP=1 PSRP_STRESS_CYCLES=200 test_stress
+```
+
+It runs the ordinary open/run/close cycle in a loop and asserts that reusing a
+transport does not grow the process handle count. That is how a Receive
+cancellation race was found: it failed about one run in a hundred cycles and no
+single pass could see it.
+
 Leaks are caught separately. AddressSanitizer on Windows has no leak detector,
 so the tests and the fuzzer turn on the MSVC debug CRT's allocation tracking
 instead; a debug MSVC run reports `(leak-checked)` when it is active.
