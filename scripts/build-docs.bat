@@ -12,6 +12,10 @@ if errorlevel 1 (
   exit /b 1
 )
 
+rem doxygen will not create a nested output directory, and a clean clone has
+rem no build\ at all.
+if not exist build\doc mkdir build\doc
+
 rem Warnings mean the published docs are wrong (mis-parsed XML tags in comments
 rem silently mangle the output), so treat any output on stderr as a failure.
 doxygen docs\Doxyfile 2>docs-warnings.txt

@@ -31,6 +31,10 @@ jobs:
       - name: Generate
         run: |
           doxygen --version
+          # doxygen will not create a nested output directory, and a fresh
+          # checkout has no build/ at all. It only ever worked locally because
+          # cmake had already made one.
+          mkdir -p build/doc
           doxygen docs/Doxyfile 2>warnings.txt || true
           cat warnings.txt
           grep -vE "(obsolete|Unknown tag|unsupported tag|ignoring unsupported)" warnings.txt > real.txt || true
