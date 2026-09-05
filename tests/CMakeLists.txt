@@ -38,10 +38,13 @@ psrp_add_unit_test(test_hostparams unit/test_hostparams.c)
 psrp_add_unit_test(test_timezone unit/test_timezone.c)
 psrp_add_unit_test(test_invocation unit/test_invocation.c)
 
-# Windows-backed: crypto is CNG and shell enumeration is the WSMan COM API.
-# Both are behind seams with no POSIX implementation yet (TODO PSRP-03).
+# The crypto tests run on both backends: CNG on Windows, OpenSSL elsewhere.
+# Running them against both is the point -- they pin the wire formats where a
+# reasonable-looking choice would fail to interoperate silently.
+psrp_add_unit_test(test_crypto unit/test_crypto.c)
+
+# Shell enumeration is the WSMan COM API and has no POSIX counterpart.
 if(PSRP_HAVE_TRANSPORT)
-  psrp_add_unit_test(test_crypto unit/test_crypto.c)
   psrp_add_unit_test(test_enumerate unit/test_enumerate.c)
 endif()
 psrp_add_unit_test(test_differential unit/test_differential.c)

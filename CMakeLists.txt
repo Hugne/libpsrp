@@ -58,6 +58,7 @@ add_library(psrp STATIC
   src/proto/timezone.c
   src/proto/invocation.c
   src/proto/keyexchange_msg.c
+  src/crypto/crypto_shared.c
   src/state/hostvalues.c
   src/state/hostparams.c
 )
@@ -85,20 +86,20 @@ if(WIN32)
   target_link_libraries(psrp PUBLIC xmllite bcrypt WsmSvc ole32 oleaut32)
   set(PSRP_HAVE_TRANSPORT ON CACHE INTERNAL "")
 else()
-  # Non-Windows is a partial port, deliberately: the protocol core and the XML
-  # and RNG backends build and are tested, and that is what proves the seams
-  # are real rather than aspirational. Crypto and transport are not ported
-  # yet, so psrp_client and the WSMan transport are absent here -- a build
-  # that omits them is honest, where stubs returning UNSUPPORTED would later
-  # be mistaken for support. See TODO PSRP-03.
+  # Non-Windows is a partial port: the protocol core, XML, RNG and crypto all
+  # build and are tested here. What is missing is the transport, so
+  # psrp_client and the WSMan transport are absent rather than stubbed -- a
+  # build that omits them is honest, where stubs returning UNSUPPORTED would
+  # later be mistaken for support. See TODO PSRP-03.
   find_package(PkgConfig REQUIRED)
   pkg_check_modules(LIBXML2 REQUIRED IMPORTED_TARGET libxml-2.0)
+  pkg_check_modules(OPENSSL REQUIRED IMPORTED_TARGET libcrypto)
   target_sources(psrp PRIVATE
     src/xml/xml_libxml2.c
     src/platform/random_posix.c
-    src/crypto/crypto_none.c
+    src/crypto/crypto_openssl.c
   )
-  target_link_libraries(psrp PUBLIC PkgConfig::LIBXML2)
+  target_link_libraries(psrp PUBLIC PkgConfig::LIBXML2 PkgConfig::OPENSSL)
   set(PSRP_HAVE_TRANSPORT OFF CACHE INTERNAL "")
 endif()
 
