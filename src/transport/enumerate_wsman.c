@@ -251,15 +251,16 @@ static BSTR bstr_of(const wchar_t *s)
 /*
  * A discovery session holds the COM objects open across calls.
  *
- * That is not a convenience. Measured on Windows 11: creating a WSMan session,
- * enumerating once and releasing everything leaks about one process handle per
- * call, and CoUninitialize does not reclaim it. Reusing one session for 200
- * enumerations leaks nothing, and the handles come back when the session is
- * finally released. A session that is merely created and never used does not
- * leak either, so it is specifically a used-then-discarded session that costs.
+ * Measured on Windows 11: a WSMan session that enumerates once and is then
+ * released leaves about one process handle behind for roughly a minute. The
+ * handle is a WinHTTP connection Event, not anything of WSMan's or ours -- the
+ * same pattern reproduces with plain WinHTTP and no WSMan at all -- and
+ * WinHTTP's scavenger reclaims it, so nothing is leaked. A session that is
+ * created and never used costs nothing, and a reused one costs nothing after
+ * the first few.
  *
- * The leak is in the WSMan automation layer, not here: it reproduces with a
- * standalone program that touches none of this library's code.
+ * So this is an efficiency measure, not a workaround: listing in a loop through
+ * one-shot calls holds handles for no reason. See TODO PSRP-14.
  */
 struct psrp_discovery {
     bool com_started;

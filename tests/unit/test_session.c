@@ -1588,6 +1588,45 @@ PSRP_TEST(a_bad_pool_message_breaks_the_pool)
     psrp_session_free(s);
 }
 
+PSRP_TEST(breaking_the_pool_fails_its_pipelines)
+{
+    /* 3.1.1.2.2, 3.1.5.1 rule 3 and 3.1.5.3.13 pair breaking the pool with
+     * stopping its pipelines, and PowerShell fails every pipeline attached to
+     * a session that closed on an error. Without this a caller waiting on a
+     * pipeline's terminal event waits forever: rule 5 means nothing further
+     * will arrive for it. */
+    psrp_session_t *s = psrp_session_new();
+    psrp_guid_t pid;
+    psrp_event_t e;
+    int32_t st = -1;
+    bool saw_pipeline_failed = false, saw_pool_broken = false;
+
+    ASSERT_NOT_NULL(s);
+    start_pipeline(s, &pid);
+    ASSERT_EQ_SZ(psrp_session_pipeline_count(s), 1u);
+
+    ASSERT_OK(psrp_session_notify_fault(s, "transport died"));
+
+    while (psrp_session_next_event(s, &e) == PSRP_OK) {
+        if (e.kind == PSRP_EVENT_PIPELINE_STATE &&
+            e.state == PSRP_INVOCATION_FAILED &&
+            psrp_guid_equal(&e.pipeline_id, &pid))
+            saw_pipeline_failed = true;
+        if (e.kind == PSRP_EVENT_POOL_STATE &&
+            e.state == PSRP_RUNSPACE_BROKEN)
+            saw_pool_broken = true;
+        psrp_event_free(&e);
+    }
+
+    ASSERT_TRUE(saw_pipeline_failed);
+    ASSERT_TRUE(saw_pool_broken);
+    /* The pipeline is gone from the table, not merely marked. */
+    ASSERT_EQ_SZ(psrp_session_pipeline_count(s), 0u);
+    ASSERT_ERR(psrp_session_pipeline_state(s, &pid, &st), PSRP_ERR_NOT_FOUND);
+
+    psrp_session_free(s);
+}
+
 PSRP_TEST(a_bad_pipeline_message_stops_only_that_pipeline)
 {
     /* 3.1.7 again: a pipeline message failing must not take the pool with it,
@@ -1754,6 +1793,7 @@ static const psrp_test_case_t cases[] = {
     PSRP_TEST_CASE(pool_init_data_reports_the_servers_bounds),
     PSRP_TEST_CASE(a_broken_pool_processes_nothing),
     PSRP_TEST_CASE(a_bad_pool_message_breaks_the_pool),
+    PSRP_TEST_CASE(breaking_the_pool_fails_its_pipelines),
     PSRP_TEST_CASE(a_bad_pipeline_message_stops_only_that_pipeline),
 };
 

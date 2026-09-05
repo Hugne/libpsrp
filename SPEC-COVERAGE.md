@@ -31,7 +31,7 @@ The two entries left beyond those exist only to support a non-Windows port.
 | Build: CMake+Ninja, MSVC & clang, CTest | done | done | both green, warnings-as-errors |
 | Fuzzing + AddressSanitizer | done | done | every parser; ASan build runs the fuzz label and the live test |
 | Leak checking | done | done | MSVC debug CRT; ASan on Windows has no leak detector |
-| Handle-leak auditing | done | done | process handle counts across repeated lifecycles; found two transport bugs and one platform defect (TODO PSRP-14) |
+| Handle-leak auditing | done | done | process handle counts across repeated lifecycles; found three real transport bugs. The growth it also showed was not a leak: see TODO PSRP-14 |
 | Lifecycle stress test | done | done | `tests/interop/test_stress.c`; caught a Receive cancellation race that a single pass could not (TODO PSRP-15) |
 | Thread-safety audit of the transport | done | done | every recv field checked against its lock; MSVC has no ThreadSanitizer, so this is by inspection |
 | Public header self-containment | done | done | one generated TU per header, in C and C++; a build-time check, verified to fail on a broken header |

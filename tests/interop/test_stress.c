@@ -13,8 +13,9 @@
  *
  *   1. Every cycle succeeds. The race showed up here as a hard failure.
  *   2. Reusing one transport for many shells does not grow the handle count.
- *      A fresh transport per shell does grow it, but that is a WSMan defect
- *      recorded as TODO PSRP-14 rather than something this can assert against.
+ *      A fresh transport per shell does grow it transiently -- WinHTTP holds a
+ *      connection Event for about a minute per discarded session (TODO
+ *      PSRP-14) -- which is why only the reuse case is asserted here.
  *
  * Opt-in like the other interop tests: PSRP_INTEROP=1, with PSRP_USER and
  * PSRP_PASS for credentials. PSRP_STRESS_CYCLES raises the count for a soak.
@@ -185,8 +186,9 @@ int main(void)
            (unsigned long)before, (unsigned long)after);
 
     /* Reuse must not accumulate. A small allowance covers lazy per-thread
-     * setup inside WSMan; a real leak here grew by one per cycle, so anything
-     * proportional to the count would be caught even at the default size. */
+     * setup inside WSMan; the bugs this has caught grew by one handle per
+     * cycle, so anything proportional to the count is caught even at the
+     * default size. */
     if ((long)after - (long)before > 16) {
         printf("FAIL: handle count grew by %ld over %d reused cycles\n",
                (long)after - (long)before, cycles);

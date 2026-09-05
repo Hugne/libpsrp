@@ -159,11 +159,11 @@ PSRP_TEST(discovery_rejects_bad_arguments)
 
 PSRP_TEST(a_discovery_handle_can_list_repeatedly)
 {
-    /* The reason this API exists: the WSMan automation layer leaks a process
-     * handle for every session that does work and then goes away, so listing
-     * in a loop through one-shot calls leaks. Reusing a handle does not.
-     * Measured: 100 one-shot calls cost ~112 handles, 100 through one handle
-     * cost 1.
+    /* The reason this API exists: each discarded WSMan session leaves a
+     * WinHTTP connection Event behind for about a minute (TODO PSRP-14), so
+     * listing in a loop through one-shot calls holds handles it need not.
+     * Measured: 100 one-shot calls held ~112 handles, 100 through one handle
+     * held 1.
      *
      * Enumeration needs a live WinRM service, so this only asserts the shape
      * when the machine has one; on a machine without, opening fails and there

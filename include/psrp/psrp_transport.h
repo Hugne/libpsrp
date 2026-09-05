@@ -47,11 +47,11 @@ void psrp_transport_free(psrp_transport_t *t);
 /* Opens a shell, carrying `payload` as the creationXml.
  *
  * A transport may be reused: after psrp_transport_close_shell, another shell
- * can be opened on the same transport. Prefer that to creating a transport per
- * shell, because the WSMan layer leaks a process handle for every session that
- * does work and is then discarded (TODO PSRP-14). Measured: a new transport
- * per shell costs about one handle each and keeps climbing, while 80 shells
- * opened and closed on one transport cost nothing after the first few. */
+ * can be opened on the same transport. Prefer that: each discarded session
+ * leaves a WinHTTP connection Event behind until WinHTTP scavenges it about a
+ * minute later, so a transport per shell holds handles it does not need (TODO
+ * PSRP-14). They are reclaimed either way; 80 shells on one transport simply
+ * cost nothing in the first place. */
 psrp_result_t psrp_transport_open(psrp_transport_t *t,
                                   const psrp_guid_t *shell_id,
                                   const void *payload, size_t len);
@@ -146,12 +146,12 @@ typedef struct psrp_shell_info {
 
 /* A discovery session. Hold one of these when listing shells more than once.
  *
- * The WSMan automation layer leaks a handle for every session that performs
- * work, and does not reclaim it when the session is released, so building and
- * tearing one down per call leaks roughly one handle per call. Reusing a
- * session does not leak at all: 200 enumerations through one session cost
- * nothing measurable. That is why this exists as a handle rather than only as
- * the one-shot call below.
+ * Each WSMan session that does work leaves a WinHTTP connection Event behind
+ * for about a minute before WinHTTP's scavenger reclaims it, so building and
+ * tearing one down per call holds roughly one handle per call for that long.
+ * Nothing is leaked -- the handles come back -- but a caller listing in a
+ * loop pays for it needlessly, and reuse costs nothing measurable. See TODO
+ * PSRP-14.
  *
  * COM is initialised for the calling thread when the handle is opened and
  * uninitialised when it is freed, so a handle must be opened, used and freed

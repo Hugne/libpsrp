@@ -928,7 +928,22 @@ psrp_result_t psrp_transport_connect(psrp_transport_t *t,
     op_destroy(&op);
     free(connect_xml);
     if (rc != PSRP_OK) {
-        t->shell = NULL;
+        /* WSManConnectShell may have produced a handle even though the
+         * operation as a whole failed -- the connectResponseXml checks above
+         * run after a successful connect. Nulling it without closing would
+         * strand the shell: psrp_transport_free would no longer see it, and
+         * the server would hold the pool until its idle timeout. */
+        if (t->shell) {
+            async_op_t close_op;
+            WSMAN_SHELL_ASYNC close_async;
+            op_init(&close_op);
+            close_async.operationContext = &close_op;
+            close_async.completionFunction = generic_completion;
+            WSManCloseShell(t->shell, 0, &close_async);
+            WaitForSingleObject(close_op.done, t->timeout_ms);
+            op_destroy(&close_op);
+            t->shell = NULL;
+        }
         return rc;
     }
 

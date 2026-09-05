@@ -294,7 +294,7 @@ int main(void)
     printf("shell closed\n");
 
     /* 9. Reopen on the same transport. Transport reuse is the documented way to
-     *    avoid the WSMan per-session handle leak (TODO PSRP-14), and it also
+     *    avoid holding a WinHTTP Event per session (TODO PSRP-14), and it also
      *    exercises the teardown ordering: the command has to be released
      *    before its shell, which used not to happen and made repeated cycles
      *    fail after about forty. */

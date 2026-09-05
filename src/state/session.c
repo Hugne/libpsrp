@@ -573,6 +573,22 @@ psrp_result_t psrp_session_notify_fault(psrp_session_t *s, const char *reason)
         return PSRP_OK;
 
     s->pool_state = PSRP_RUNSPACE_BROKEN;
+
+    /* 3.1.1.2.2, 3.1.5.1 rule 3 and 3.1.5.3.13 all pair breaking the pool with
+     * stopping its pipelines, and PowerShell does the same: a session that
+     * closes on an error fails every pipeline attached to it. Leaving them in
+     * the table strands any caller waiting on a terminal pipeline event, since
+     * rule 5 means nothing more will ever arrive for them. */
+    while (s->pipe_head) {
+        psrp_guid_t pid = s->pipe_head->id;
+        psrp_event_t pe;
+        pipe_remove(s, &pid);
+        event_init(&pe, PSRP_EVENT_PIPELINE_STATE, PSRP_MSG_PIPELINE_STATE,
+                   &pid);
+        pe.state = PSRP_INVOCATION_FAILED;
+        (void)event_push(s, &pe);
+    }
+
     event_init(&e, PSRP_EVENT_POOL_STATE, PSRP_MSG_RUNSPACEPOOL_STATE, NULL);
     e.state = PSRP_RUNSPACE_BROKEN;
     e.text = dup_cstr(reason);
