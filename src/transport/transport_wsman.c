@@ -65,6 +65,10 @@ static void CALLBACK generic_completion(PVOID ctx, DWORD flags,
 
 /* ------------------------------------------------------------ receive ---- */
 
+/* Callers copy this buffer out under the lock, so both sides must agree on
+ * its size. */
+#define PSRP_RECV_DETAIL_CHARS 512
+
 typedef struct recv_ctx {
     CRITICAL_SECTION lock;
     HANDLE data_ready;
@@ -79,7 +83,7 @@ typedef struct recv_ctx {
      * roughly one run in a hundred cycles. */
     unsigned pending_aborts;
     DWORD error;
-    wchar_t detail[512];
+    wchar_t detail[PSRP_RECV_DETAIL_CHARS];
 } recv_ctx_t;
 
 static void CALLBACK receive_completion(PVOID ctx, DWORD flags,
@@ -791,6 +795,7 @@ psrp_result_t psrp_transport_receive(psrp_transport_t *t, psrp_buffer_t *out,
         bool finished;
         bool needs_repost = false;
         DWORD err;
+        wchar_t detail[PSRP_RECV_DETAIL_CHARS];
 
         EnterCriticalSection(&t->recv.lock);
         if (t->recv.buf.len) {
@@ -802,6 +807,11 @@ psrp_result_t psrp_transport_receive(psrp_transport_t *t, psrp_buffer_t *out,
         }
         finished = t->recv.done;
         err = t->recv.error;
+        /* Copied out under the lock rather than read afterwards. The callback
+         * fills this in with wcsncpy and terminates it on the next line, so a
+         * reader racing that pair can see an unterminated buffer and run off
+         * the end of it. */
+        memcpy(detail, t->recv.detail, sizeof detail);
         /* A Receive operation can end before the command does; re-post so the
          * remaining output still arrives. */
         if (t->recv.op_ended && !t->recv.done) {
@@ -811,13 +821,17 @@ psrp_result_t psrp_transport_receive(psrp_transport_t *t, psrp_buffer_t *out,
         LeaveCriticalSection(&t->recv.lock);
 
         if (needs_repost) {
+            /* Deliberately not cancel_receive: this operation has already
+             * reported END_OF_OPERATION, so closing it produces no further
+             * completion. Counting an abort here would leave a phantom that
+             * swallowed the next genuine one. */
             if (t->recv_op) { WSManCloseOperation(t->recv_op, 0); t->recv_op = NULL; }
             post_receive(t);
         }
 
         if (have) return PSRP_OK;
         if (err != 0) {
-            set_error(t, "WSManReceiveShellOutput", err, t->recv.detail);
+            set_error(t, "WSManReceiveShellOutput", err, detail);
             return PSRP_ERR_TRANSPORT;
         }
         /* Nothing buffered and nothing more coming, or the caller's patience

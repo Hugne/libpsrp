@@ -33,6 +33,7 @@ The two entries left beyond those exist only to support a non-Windows port.
 | Leak checking | done | done | MSVC debug CRT; ASan on Windows has no leak detector |
 | Handle-leak auditing | done | done | process handle counts across repeated lifecycles; found two transport bugs and one platform defect (TODO PSRP-14) |
 | Lifecycle stress test | done | done | `tests/interop/test_stress.c`; caught a Receive cancellation race that a single pass could not (TODO PSRP-15) |
+| Thread-safety audit of the transport | done | done | every recv field checked against its lock; MSVC has no ThreadSanitizer, so this is by inspection |
 | Worked example | done | done | `examples/run_command.c`, verified against a live server |
 | Differential testing vs psrpcore | done | done | both directions, 39 cases; corpus committed so ctest stays hermetic |
 
