@@ -29,11 +29,15 @@ extern "C" {
 typedef struct psrp_transport psrp_transport_t;
 
 typedef struct psrp_wsman_config {
-    /** e.g. L"http://localhost:5985/wsman". NULL uses that default. */
-    const wchar_t *connection;
+    /** e.g. "http://localhost:5985/wsman". NULL uses that default.
+     *
+     * Strings here are UTF-8, like every string in this library. The Windows
+     * transport converts them to UTF-16 for WSMan and keeps its own copies,
+     * so the config need not outlive the call that consumes it. */
+    const char *connection;
     /** NULL authenticates as the current user via Negotiate. */
-    const wchar_t *username;
-    const wchar_t *password;
+    const char *username;
+    const char *password;
     /* 0 selects the 240000 ms the spec's appendix cites as typical. */
     uint32_t operation_timeout_ms;
 } psrp_wsman_config_t;

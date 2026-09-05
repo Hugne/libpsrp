@@ -36,18 +36,6 @@ static void check(int ok, const char *what)
     if (!ok) failures++;
 }
 
-static wchar_t *widen(const char *s)
-{
-    size_t n;
-    wchar_t *w;
-    if (!s) return NULL;
-    n = strlen(s) + 1;
-    w = (wchar_t *)calloc(n, sizeof *w);
-    if (!w) return NULL;
-    MultiByteToWideChar(CP_UTF8, 0, s, -1, w, (int)n);
-    return w;
-}
-
 /* Flattens a result to a NUL-terminated string for substring assertions. */
 static char *result_text(const psrp_run_result_t *r)
 {
@@ -71,7 +59,7 @@ int main(void)
     psrp_client_t *c = NULL;
     psrp_run_result_t r;
     psrp_command_t *cmd = NULL;
-    wchar_t *wuser = NULL, *wpass = NULL, *wconn = NULL;
+    const char *user = NULL, *pass = NULL, *conn = NULL;
     char *text = NULL;
     psrp_result_t rc;
     int i;
@@ -81,14 +69,14 @@ int main(void)
         return 0;
     }
 
-    wuser = widen(getenv("PSRP_USER"));
-    wpass = widen(getenv("PSRP_PASS"));
-    wconn = widen(getenv("PSRP_CONNECTION"));
+    user = getenv("PSRP_USER");
+    pass = getenv("PSRP_PASS");
+    conn = getenv("PSRP_CONNECTION");
 
     memset(&cfg, 0, sizeof cfg);
-    cfg.connection = wconn;
-    cfg.username = wuser;
-    cfg.password = wpass;
+    cfg.connection = conn;
+    cfg.username = user;
+    cfg.password = pass;
     cfg.operation_timeout_ms = 60000;
 
     printf("connect\n");
@@ -292,7 +280,6 @@ int main(void)
           "and the low-level view agrees the pool is open");
 
     psrp_client_free(c);
-    free(wuser); free(wpass); free(wconn);
 
     printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED",
            failures, failures == 1 ? "" : "s");

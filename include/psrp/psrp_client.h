@@ -48,11 +48,11 @@ extern "C" {
 typedef struct psrp_client psrp_client_t;
 
 typedef struct psrp_client_config {
-    /** e.g. L"http://localhost:5985/wsman". NULL uses that default. */
-    const wchar_t *connection;
+    /** e.g. "http://localhost:5985/wsman". NULL uses that default. UTF-8. */
+    const char *connection;
     /** NULL authenticates as the current user via Negotiate. */
-    const wchar_t *username;
-    const wchar_t *password;
+    const char *username;
+    const char *password;
     /** WSMan operation timeout. 0 selects the transport's own default. */
     uint32_t operation_timeout_ms;
     /** How long psrp_client_connect waits for the pool. 0 means 30000. */

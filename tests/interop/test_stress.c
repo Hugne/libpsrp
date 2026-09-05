@@ -31,18 +31,6 @@
 #include "psrp/psrp_session.h"
 #include "psrp/psrp_transport.h"
 
-static wchar_t *widen(const char *s)
-{
-    size_t n;
-    wchar_t *w;
-    if (!s) return NULL;
-    n = strlen(s) + 1;
-    w = (wchar_t *)calloc(n, sizeof *w);
-    if (!w) return NULL;
-    MultiByteToWideChar(CP_UTF8, 0, s, -1, w, (int)n);
-    return w;
-}
-
 static DWORD handle_count(void)
 {
     DWORD h = 0;
@@ -157,8 +145,8 @@ int main(void)
     if (cycles < 2) cycles = 2;
 
     memset(&cfg, 0, sizeof cfg);
-    cfg.username = widen(getenv("PSRP_USER"));
-    cfg.password = widen(getenv("PSRP_PASS"));
+    cfg.username = getenv("PSRP_USER");
+    cfg.password = getenv("PSRP_PASS");
     cfg.operation_timeout_ms = 60000;
 
     if (psrp_wsman_transport_create(&cfg, &t) != PSRP_OK) {
@@ -200,7 +188,5 @@ int main(void)
 
 done:
     psrp_transport_free(t);
-    free((void *)cfg.username);
-    free((void *)cfg.password);
     return status;
 }

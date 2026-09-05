@@ -69,18 +69,6 @@ static void check(int ok, const char *what)
     if (!ok) failures++;
 }
 
-static wchar_t *widen(const char *s)
-{
-    size_t n;
-    wchar_t *w;
-    if (!s) return NULL;
-    n = strlen(s) + 1;
-    w = (wchar_t *)calloc(n, sizeof *w);
-    if (!w) return NULL;
-    MultiByteToWideChar(CP_UTF8, 0, s, -1, w, (int)n);
-    return w;
-}
-
 /* The lab's payload, byte for byte: (i * 13 + 7) & 0xFF. */
 static void fill_payload(unsigned char *p, size_t n)
 {
@@ -239,7 +227,7 @@ int main(void)
     psrp_transport_t *t = NULL;
     psrp_session_t *s = NULL;
     psrp_buffer_t start;
-    wchar_t *wuser = NULL, *wpass = NULL, *wconn = NULL;
+    const char *user = NULL, *pass = NULL, *conn = NULL;
     size_t i;
     int all = 1;
 
@@ -248,14 +236,14 @@ int main(void)
         return 0;
     }
 
-    wuser = widen(getenv("PSRP_USER"));
-    wpass = widen(getenv("PSRP_PASS"));
-    wconn = widen(getenv("PSRP_CONNECTION"));
+    user = getenv("PSRP_USER");
+    pass = getenv("PSRP_PASS");
+    conn = getenv("PSRP_CONNECTION");
 
     memset(&cfg, 0, sizeof cfg);
-    cfg.username = wuser;
-    cfg.password = wpass;
-    cfg.connection = wconn;
+    cfg.username = user;
+    cfg.password = pass;
+    cfg.connection = conn;
     cfg.operation_timeout_ms = 60000;
 
     psrp_buffer_init(&start);
@@ -333,7 +321,6 @@ int main(void)
     psrp_session_free(s);
     psrp_transport_free(t);
     psrp_buffer_free(&start);
-    free(wuser); free(wpass); free(wconn);
 
     printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED",
            failures, failures == 1 ? "" : "s");

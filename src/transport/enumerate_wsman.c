@@ -243,9 +243,32 @@ psrp_result_t psrp_wsman_parse_shell(const void *xml, size_t n,
 
 /* ---------------------------------------------------------- enumerate --- */
 
-static BSTR bstr_of(const wchar_t *s)
+/* For the fixed wide constants in this file, which are already UTF-16. */
+static BSTR bstr_of_wide(const wchar_t *s)
 {
     return s ? SysAllocString(s) : NULL;
+}
+
+/* UTF-8 to BSTR. The COM automation interface wants UTF-16, and the config is
+ * UTF-8 like the rest of the library, so the conversion happens here rather
+ * than being pushed onto the caller. */
+static BSTR bstr_of(const char *utf8)
+{
+    int n;
+    BSTR b;
+
+    if (!utf8) return NULL;
+    n = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
+    if (n <= 0) return NULL;
+
+    /* SysAllocStringLen wants a length excluding the terminator. */
+    b = SysAllocStringLen(NULL, (UINT)(n - 1));
+    if (!b) return NULL;
+    if (MultiByteToWideChar(CP_UTF8, 0, utf8, -1, b, n) <= 0) {
+        SysFreeString(b);
+        return NULL;
+    }
+    return b;
 }
 
 /*
@@ -375,7 +398,7 @@ psrp_result_t psrp_wsman_discovery_shells(psrp_discovery_t *d,
     *count = 0;
     VariantInit(&uri_var);
 
-    uri = bstr_of(SHELL_URI);
+    uri = bstr_of_wide(SHELL_URI);
     if (!uri) return PSRP_ERR_NOMEM;
     /* The VARIANT only borrows the BSTR: it is an [in] parameter, so the
      * callee does not take ownership and this must not be VariantClear'd or

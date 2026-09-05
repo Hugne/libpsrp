@@ -29,18 +29,6 @@
 #include "psrp/psrp_session.h"
 #include "psrp/psrp_transport.h"
 
-static wchar_t *widen(const char *s)
-{
-    size_t n;
-    wchar_t *w;
-    if (!s) return NULL;
-    n = strlen(s) + 1;
-    w = (wchar_t *)calloc(n, sizeof *w);
-    if (!w) return NULL;
-    MultiByteToWideChar(CP_UTF8, 0, s, -1, w, (int)n);
-    return w;
-}
-
 /* Moves bytes from the transport into the session and drains what comes out.
  * Returns the state of the first event of `want`, or -1 if it never arrives.
  *
@@ -92,7 +80,7 @@ int main(int argc, char **argv)
     psrp_command_t *cmd = NULL;
     psrp_buffer_t payload;
     psrp_guid_t pipeline_id;
-    wchar_t *wconn = NULL, *wuser = NULL, *wpass = NULL;
+    const char *conn = NULL, *user = NULL, *pass = NULL;
     int status = 1;
     int state;
 
@@ -105,14 +93,14 @@ int main(int argc, char **argv)
         return 2;
     }
 
-    wconn = widen(argv[1]);
-    wuser = widen(argv[2]);
-    wpass = widen(argv[3]);
+    conn = argv[1];
+    user = argv[2];
+    pass = argv[3];
 
     memset(&cfg, 0, sizeof cfg);
-    cfg.connection = wconn;
-    cfg.username = wuser;
-    cfg.password = wpass;
+    cfg.connection = conn;
+    cfg.username = user;
+    cfg.password = pass;
     cfg.operation_timeout_ms = 60000;
 
     psrp_buffer_init(&payload);
@@ -171,6 +159,5 @@ done:
     psrp_session_free(s);
     psrp_transport_free(t);
     psrp_buffer_free(&payload);
-    free(wconn); free(wuser); free(wpass);
     return status;
 }

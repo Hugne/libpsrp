@@ -213,12 +213,39 @@ struct psrp_transport {
     bool disconnected;
     DWORD pending_idle_timeout_ms;
     WSMAN_AUTHENTICATION_CREDENTIALS auth;
+    /* WSManCreateSession does not copy the credential strings, it keeps the
+     * pointers it is given, so they must outlive the session. Converting the
+     * caller's UTF-8 once and owning the result here also keeps the config's
+     * lifetime out of this library's contract. */
+    wchar_t *w_user;
+    wchar_t *w_pass;
+    wchar_t *w_conn;
     HANDLE data_ready;      /* signalled by either channel */
     recv_ctx_t shell_rx;    /* pool-level traffic */
     recv_ctx_t cmd_rx;      /* the current pipeline's traffic */
     DWORD timeout_ms;
     char last_error[640];
 };
+
+/* UTF-8 in, an owned UTF-16 copy out. NULL in gives NULL out, which keeps
+ * "no username" distinct from "empty username". */
+static wchar_t *wide_dup(const char *utf8)
+{
+    int n;
+    wchar_t *w;
+
+    if (!utf8) return NULL;
+
+    n = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
+    if (n <= 0) return NULL;
+    w = (wchar_t *)calloc((size_t)n, sizeof *w);
+    if (!w) return NULL;
+    if (MultiByteToWideChar(CP_UTF8, 0, utf8, -1, w, n) <= 0) {
+        free(w);
+        return NULL;
+    }
+    return w;
+}
 
 static void rx_init(recv_ctx_t *r, HANDLE data_ready)
 {
@@ -291,11 +318,23 @@ psrp_result_t psrp_wsman_transport_create(const psrp_wsman_config_t *cfg,
 
     t->auth.authenticationMechanism = WSMAN_FLAG_AUTH_NEGOTIATE;
     if (cfg && cfg->username && *cfg->username) {
-        t->auth.userAccount.username = cfg->username;
-        t->auth.userAccount.password = cfg->password ? cfg->password : L"";
+        t->w_user = wide_dup(cfg->username);
+        t->w_pass = wide_dup(cfg->password ? cfg->password : "");
+        if (!t->w_user || !t->w_pass) {
+            psrp_transport_free(t);
+            return PSRP_ERR_NOMEM;
+        }
+        t->auth.userAccount.username = t->w_user;
+        t->auth.userAccount.password = t->w_pass;
     }
 
-    connection = (cfg && cfg->connection) ? cfg->connection : kDefaultConnection;
+    if (cfg && cfg->connection) {
+        t->w_conn = wide_dup(cfg->connection);
+        if (!t->w_conn) { psrp_transport_free(t); return PSRP_ERR_NOMEM; }
+        connection = t->w_conn;
+    } else {
+        connection = kDefaultConnection;
+    }
     rc = WSManCreateSession(t->api, connection, 0, &t->auth, NULL, &t->session);
     if (rc != 0) {
         set_error(t, "WSManCreateSession", rc, NULL);
@@ -385,6 +424,13 @@ void psrp_transport_free(psrp_transport_t *t)
     }
     if (t->session) { WSManCloseSession(t->session, 0); t->session = NULL; }
     if (t->api) { WSManDeinitialize(t->api, 0); t->api = NULL; }
+
+    /* Only after the session is closed: it has been holding these pointers,
+     * not copies of them, so freeing them earlier would have WSMan reading
+     * memory already returned to the allocator while it shuts down. */
+    free(t->w_user);
+    free(t->w_pass);
+    free(t->w_conn);
 
     rx_destroy(&t->cmd_rx);
     rx_destroy(&t->shell_rx);

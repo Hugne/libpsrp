@@ -20,18 +20,6 @@
 
 #include "psrp/psrp_client.h"
 
-static wchar_t *widen(const char *s)
-{
-    size_t n;
-    wchar_t *w;
-    if (!s) return NULL;
-    n = strlen(s) + 1;
-    w = (wchar_t *)calloc(n, sizeof *w);
-    if (!w) return NULL;
-    MultiByteToWideChar(CP_UTF8, 0, s, -1, w, (int)n);
-    return w;
-}
-
 /* Prints one stream, if it has anything in it. */
 static void print_stream(const char *label, const psrp_stream_t *st, FILE *to)
 {
@@ -44,7 +32,7 @@ int main(int argc, char **argv)
 {
     psrp_client_config_t cfg;
     psrp_client_t *c = NULL;
-    wchar_t *wconn = NULL, *wuser = NULL, *wpass = NULL;
+    const char *conn = NULL, *user = NULL, *pass = NULL;
     int status = 1;
     int i;
 
@@ -57,14 +45,14 @@ int main(int argc, char **argv)
         return 2;
     }
 
-    wconn = widen(argv[1]);
-    wuser = widen(argv[2]);
-    wpass = widen(argv[3]);
+    conn = argv[1];
+    user = argv[2];
+    pass = argv[3];
 
     memset(&cfg, 0, sizeof cfg);
-    cfg.connection = wconn;
-    cfg.username = wuser;
-    cfg.password = wpass;
+    cfg.connection = conn;
+    cfg.username = user;
+    cfg.password = pass;
 
     if (psrp_client_connect(&cfg, &c) != PSRP_OK) {
         fprintf(stderr, "connect failed\n");
@@ -102,6 +90,5 @@ int main(int argc, char **argv)
 
 done:
     psrp_client_free(c);
-    free(wconn); free(wuser); free(wpass);
     return status;
 }

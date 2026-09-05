@@ -38,18 +38,6 @@
 #include "psrp/psrp_transport.h"
 #include "psrp/psrp_records.h"
 
-static wchar_t *widen(const char *s)
-{
-    size_t n;
-    wchar_t *w;
-    if (!s) return NULL;
-    n = strlen(s) + 1;
-    w = (wchar_t *)calloc(n, sizeof *w);
-    if (!w) return NULL;
-    MultiByteToWideChar(CP_UTF8, 0, s, -1, w, (int)n);
-    return w;
-}
-
 /* Drains the session, appending any pipeline output to `sink`. Returns the
  * state of the first pipeline-state event seen, or -1. */
 static int pump(psrp_session_t *s, psrp_transport_t *t, psrp_buffer_t *sink,
@@ -263,8 +251,8 @@ int main(void)
     }
 
     memset(&cfg, 0, sizeof cfg);
-    cfg.username = widen(getenv("PSRP_USER"));
-    cfg.password = widen(getenv("PSRP_PASS"));
+    cfg.username = getenv("PSRP_USER");
+    cfg.password = getenv("PSRP_PASS");
     cfg.operation_timeout_ms = 60000;
 
     if (psrp_wsman_transport_create(&cfg, &t) != PSRP_OK) {
@@ -286,7 +274,5 @@ int main(void)
 
 done:
     psrp_transport_free(t);
-    free((void *)cfg.username);
-    free((void *)cfg.password);
     return status;
 }

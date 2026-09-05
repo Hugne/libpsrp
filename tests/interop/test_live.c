@@ -19,18 +19,6 @@
 #include "psrp/psrp_transport.h"
 #include "psrp/psrp_records.h"
 
-static wchar_t *widen(const char *s)
-{
-    size_t n;
-    wchar_t *w;
-    if (!s) return NULL;
-    n = strlen(s) + 1;
-    w = (wchar_t *)calloc(n, sizeof *w);
-    if (!w) return NULL;
-    MultiByteToWideChar(CP_UTF8, 0, s, -1, w, (int)n);
-    return w;
-}
-
 /* Pumps the transport into the session until `want` is seen or time runs out.
  * Returns the state reported by the matching event, or -2 on timeout. */
 static int pump_until(psrp_session_t *s, psrp_transport_t *t,
@@ -104,7 +92,6 @@ int main(void)
     psrp_command_t *cmd = NULL;
     psrp_buffer_t payload, out_text;
     psrp_guid_t pipeline_id;
-    wchar_t *wuser = NULL, *wpass = NULL, *wconn = NULL;
     int status = 1;
     int state;
 
@@ -114,12 +101,9 @@ int main(void)
     }
 
     memset(&cfg, 0, sizeof cfg);
-    wuser = widen(user);
-    wpass = widen(pass);
-    wconn = widen(conn);
-    cfg.username = wuser;
-    cfg.password = wpass;
-    cfg.connection = wconn;
+    cfg.username = user;
+    cfg.password = pass;
+    cfg.connection = conn;
     cfg.operation_timeout_ms = 60000;
 
     psrp_buffer_init(&payload);
@@ -351,6 +335,5 @@ done:
     psrp_transport_free(t);
     psrp_buffer_free(&payload);
     psrp_buffer_free(&out_text);
-    free(wuser); free(wpass); free(wconn);
     return status;
 }

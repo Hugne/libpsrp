@@ -30,18 +30,6 @@
 #include "psrp/psrp_metadata.h"
 #include "psrp/psrp_crypto.h"
 
-static wchar_t *widen(const char *s)
-{
-    size_t n;
-    wchar_t *w;
-    if (!s) return NULL;
-    n = strlen(s) + 1;
-    w = (wchar_t *)calloc(n, sizeof *w);
-    if (!w) return NULL;
-    MultiByteToWideChar(CP_UTF8, 0, s, -1, w, (int)n);
-    return w;
-}
-
 /* What one section observed, so an assertion can name what was missing. */
 typedef struct {
     int output;
@@ -1152,8 +1140,8 @@ static int section_connect_new(psrp_transport_t *t)
 
     /* Discover it the way a stranger would: by enumeration. */
     memset(&cfg, 0, sizeof cfg);
-    cfg.username = widen(getenv("PSRP_USER"));
-    cfg.password = widen(getenv("PSRP_PASS"));
+    cfg.username = getenv("PSRP_USER");
+    cfg.password = getenv("PSRP_PASS");
     cfg.operation_timeout_ms = 60000;
     if (psrp_wsman_enumerate_shells(&cfg, &shells, &shell_count) != PSRP_OK) {
         printf("  FAIL: enumerate\n");
@@ -1254,8 +1242,6 @@ done:
     psrp_session_free(s1);
     psrp_buffer_free(&payload);
     psrp_buffer_free(&resp);
-    free((void *)cfg.username);
-    free((void *)cfg.password);
     return bad;
 }
 
@@ -1445,8 +1431,8 @@ int main(int argc, char **argv)
     }
 
     memset(&cfg, 0, sizeof cfg);
-    cfg.username = widen(getenv("PSRP_USER"));
-    cfg.password = widen(getenv("PSRP_PASS"));
+    cfg.username = getenv("PSRP_USER");
+    cfg.password = getenv("PSRP_PASS");
     cfg.operation_timeout_ms = 60000;
 
     for (i = 0; i < SECTION_COUNT; i++) {
@@ -1476,7 +1462,5 @@ int main(int argc, char **argv)
     }
     printf("%s\n", status ? "FAIL" : "PASS");
 
-    free((void *)cfg.username);
-    free((void *)cfg.password);
     return status;
 }
