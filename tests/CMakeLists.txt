@@ -58,6 +58,14 @@ target_include_directories(test_input PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME interop.test_input COMMAND test_input)
 set_tests_properties(interop.test_input PROPERTIES LABELS "interop" TIMEOUT 600)
 
+# Feature coverage against a live server: the streams, runspace controls, host
+# calls and key exchange, none of which had ever been spoken to a real server.
+add_executable(test_features interop/test_features.c)
+target_link_libraries(test_features PRIVATE psrp psrp_flags)
+target_include_directories(test_features PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME interop.test_features COMMAND test_features)
+set_tests_properties(interop.test_features PROPERTIES LABELS "interop" TIMEOUT 600)
+
 # Lifecycle stress test. Also interop-labelled and also opt-in: it needs a
 # WinRM service, and it is the only test that can see defects which only appear
 # across repeated cycles.

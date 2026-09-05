@@ -16,8 +16,62 @@
 #include "internal/psrp_clixml.h"
 #include "internal/psrp_codec.h"
 
+/* Identifier assignment.
+ *
+ * 2.2.5.2.1.1 requires an object identifier to be unique for the lifetime of a
+ * serializer, and 2.2.5.3.3 makes that lifetime one message. Leaving it to the
+ * builders does not work: a nested builder cannot know what the enclosing
+ * document has already used, so every one of them numbered from zero and real
+ * messages went out with the same RefId on several different objects.
+ *
+ * So the serializer owns the id space. An object that asked for an identifier
+ * gets a fresh one here; an object that asked for none still gets none, since
+ * the attribute is optional.
+ *
+ * Type identifiers are a separate space and, unlike object identifiers, are
+ * actually referenced: an object with no type names of its own points at an
+ * earlier <TN> with <TNRef>. So those are remapped through a table rather than
+ * simply renumbered, or the reference would land on the wrong list.
+ */
+#define WRITER_TYPE_MAP_MAX 64
+
+typedef struct {
+    int64_t next_obj_id;
+    int64_t next_type_id;
+    struct { int64_t from, to; } type_map[WRITER_TYPE_MAP_MAX];
+    size_t type_map_len;
+} writer_ctx_t;
+
+/* Records that a <TN> declared with `stored` was written as `assigned`. */
+static void type_map_put(writer_ctx_t *w, int64_t stored, int64_t assigned)
+{
+    size_t i;
+    for (i = 0; i < w->type_map_len; i++) {
+        if (w->type_map[i].from == stored) {
+            w->type_map[i].to = assigned;
+            return;
+        }
+    }
+    /* Overflowing simply means a later TNRef falls back to its stored id.
+     * That is the behaviour this replaced, so it is no worse than before, and
+     * 64 distinct type lists in one message does not occur in practice. */
+    if (w->type_map_len < WRITER_TYPE_MAP_MAX) {
+        w->type_map[w->type_map_len].from = stored;
+        w->type_map[w->type_map_len].to = assigned;
+        w->type_map_len++;
+    }
+}
+
+static int64_t type_map_get(const writer_ctx_t *w, int64_t stored)
+{
+    size_t i;
+    for (i = 0; i < w->type_map_len; i++)
+        if (w->type_map[i].from == stored) return w->type_map[i].to;
+    return stored;
+}
+
 static psrp_result_t write_value(const psrp_value_t *v, const char *name,
-                                 psrp_buffer_t *out);
+                                 psrp_buffer_t *out, writer_ctx_t *w);
 
 /* ------------------------------------------------------- XML escaping ---- */
 
@@ -182,7 +236,7 @@ static const char *container_element(psrp_container_kind_t k)
 }
 
 static psrp_result_t write_property_bag(const psrp_object_t *o, bool adapted,
-                                        psrp_buffer_t *out)
+                                        psrp_buffer_t *out, writer_ctx_t *w)
 {
     size_t i, count = adapted ? psrp_object_adapted_count(o)
                               : psrp_object_extended_count(o);
@@ -195,14 +249,14 @@ static psrp_result_t write_property_bag(const psrp_object_t *o, bool adapted,
     for (i = 0; i < count; i++) {
         const psrp_property_t *p = adapted ? psrp_object_adapted(o, i)
                                            : psrp_object_extended(o, i);
-        rc = write_value(&p->value, p->name, out);
+        rc = write_value(&p->value, p->name, out, w);
         if (rc != PSRP_OK) return rc;
     }
     return close_tag(out, elem);
 }
 
 static psrp_result_t write_object(const psrp_object_t *o, const char *name,
-                                  psrp_buffer_t *out)
+                                  psrp_buffer_t *out, writer_ctx_t *w)
 {
     psrp_result_t rc;
     size_t i, n;
@@ -220,7 +274,10 @@ static psrp_result_t write_object(const psrp_object_t *o, const char *name,
     ref_id = psrp_object_ref_id(o);
     if (ref_id >= 0) {
         char num[32];
-        snprintf(num, sizeof num, " RefId=\"%lld\"", (long long)ref_id);
+        /* The stored value only says "this object wants an identifier"; the
+         * value itself comes from the serializer so it cannot collide. */
+        snprintf(num, sizeof num, " RefId=\"%lld\"",
+                 (long long)w->next_obj_id++);
         rc = psrp_buffer_append_str(out, num);
         if (rc != PSRP_OK) return rc;
     }
@@ -233,7 +290,13 @@ static psrp_result_t write_object(const psrp_object_t *o, const char *name,
      * object that shares the type refers back with <TNRef RefId="n" />. */
     n = psrp_object_type_name_count(o);
     if (n) {
-        rc = write_ref_attr(out, "TN", psrp_object_type_ref_id(o), false);
+        int64_t stored = psrp_object_type_ref_id(o);
+        int64_t assigned = -1;
+        if (stored >= 0) {
+            assigned = w->next_type_id++;
+            type_map_put(w, stored, assigned);
+        }
+        rc = write_ref_attr(out, "TN", assigned, false);
         if (rc != PSRP_OK) return rc;
         for (i = 0; i < n; i++) {
             const char *tn = psrp_object_type_name(o, i);
@@ -243,7 +306,10 @@ static psrp_result_t write_object(const psrp_object_t *o, const char *name,
         rc = close_tag(out, "TN");
         if (rc != PSRP_OK) return rc;
     } else if (psrp_object_type_ref_id(o) >= 0) {
-        rc = write_ref_attr(out, "TNRef", psrp_object_type_ref_id(o), true);
+        /* Points back at the <TN> that declared this list, under whatever
+         * identifier that one actually got. */
+        rc = write_ref_attr(out, "TNRef",
+                            type_map_get(w, psrp_object_type_ref_id(o)), true);
         if (rc != PSRP_OK) return rc;
     }
 
@@ -254,9 +320,9 @@ static psrp_result_t write_object(const psrp_object_t *o, const char *name,
         if (rc != PSRP_OK) return rc;
     }
 
-    rc = write_property_bag(o, true, out);      /* <Props>, adapted */
+    rc = write_property_bag(o, true, out, w);   /* <Props>, adapted */
     if (rc != PSRP_OK) return rc;
-    rc = write_property_bag(o, false, out);     /* <MS>, extended */
+    rc = write_property_bag(o, false, out, w);  /* <MS>, extended */
     if (rc != PSRP_OK) return rc;
 
     /* Container contents (2.2.5.2.6). */
@@ -268,14 +334,14 @@ static psrp_result_t write_object(const psrp_object_t *o, const char *name,
             for (i = 0; i < psrp_object_entry_count(o); i++) {
                 const psrp_dict_entry_t *e = psrp_object_entry(o, i);
                 rc = psrp_buffer_append_str(out, "<En>");
-                if (rc == PSRP_OK) rc = write_value(&e->key, "Key", out);
-                if (rc == PSRP_OK) rc = write_value(&e->value, "Value", out);
+                if (rc == PSRP_OK) rc = write_value(&e->key, "Key", out, w);
+                if (rc == PSRP_OK) rc = write_value(&e->value, "Value", out, w);
                 if (rc == PSRP_OK) rc = close_tag(out, "En");
                 if (rc != PSRP_OK) return rc;
             }
         } else {
             for (i = 0; i < psrp_object_item_count(o); i++) {
-                rc = write_value(psrp_object_item(o, i), NULL, out);
+                rc = write_value(psrp_object_item(o, i), NULL, out, w);
                 if (rc != PSRP_OK) return rc;
             }
         }
@@ -286,7 +352,7 @@ static psrp_result_t write_object(const psrp_object_t *o, const char *name,
     /* Extended primitive content (2.2.5.2.5). */
     prim = psrp_object_primitive(o);
     if (prim) {
-        rc = write_value(prim, NULL, out);
+        rc = write_value(prim, NULL, out, w);
         if (rc != PSRP_OK) return rc;
     }
 
@@ -294,7 +360,7 @@ static psrp_result_t write_object(const psrp_object_t *o, const char *name,
 }
 
 static psrp_result_t write_value(const psrp_value_t *v, const char *name,
-                                 psrp_buffer_t *out)
+                                 psrp_buffer_t *out, writer_ctx_t *w)
 {
     char num[64];
     const char *elem;
@@ -311,7 +377,7 @@ static psrp_result_t write_value(const psrp_value_t *v, const char *name,
         return rc;
     }
     case PSRP_VAL_OBJECT:
-        return write_object(v->as.obj, name, out);
+        return write_object(v->as.obj, name, out, w);
 
     case PSRP_VAL_BOOL:
         return write_text_element(out, elem, name, v->as.b ? "true" : "false",
@@ -380,11 +446,18 @@ static psrp_result_t write_value(const psrp_value_t *v, const char *name,
 
 psrp_result_t psrp_clixml_serialize(const psrp_value_t *v, psrp_buffer_t *out)
 {
-    return write_value(v, NULL, out);
+    /* A fresh context per call, which is exactly the serializer lifetime
+     * 2.2.5.3.3 describes: identifiers are unique within one message and
+     * restart for the next. */
+    writer_ctx_t w;
+    memset(&w, 0, sizeof w);
+    return write_value(v, NULL, out, &w);
 }
 
 psrp_result_t psrp_clixml_serialize_named(const psrp_value_t *v,
                                           const char *name, psrp_buffer_t *out)
 {
-    return write_value(v, name, out);
+    writer_ctx_t w;
+    memset(&w, 0, sizeof w);
+    return write_value(v, name, out, &w);
 }

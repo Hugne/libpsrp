@@ -51,6 +51,12 @@ struct psrp_session {
      * pointer there and so needs to outlive the call that sets it. */
     psrp_buffer_t timezone_blob;
 
+    /* A declared host, if the caller offered one. HostInfo borrows the console
+     * data by pointer, so the session owns the storage it points at. */
+    bool provide_host;
+    psrp_host_default_data_t host_console;
+    char host_title[128];
+
     psrp_defrag_t *defrag;
     psrp_buffer_t outgoing;
     psrp_buffer_t outgoing_pr;   /* host responses; the WSMan "pr" stream */
@@ -516,6 +522,32 @@ psrp_result_t psrp_session_notify_fault(psrp_session_t *s, const char *reason)
     return event_push(s, &e);
 }
 
+psrp_result_t psrp_session_provide_host(psrp_session_t *s,
+                                        const psrp_host_default_data_t *console)
+{
+    if (!s) return PSRP_ERR_INVALID_ARG;
+    if (s->pool_state != PSRP_RUNSPACE_BEFORE_OPEN) return PSRP_ERR_STATE;
+
+    if (console) s->host_console = *console;
+    else psrp_host_default_data_defaults(&s->host_console);
+
+    /* window_title is a borrowed pointer in the caller's struct and has to
+     * outlive them, so it is copied into the session. */
+    if (s->host_console.window_title) {
+        snprintf(s->host_title, sizeof s->host_title, "%s",
+                 s->host_console.window_title);
+        s->host_console.window_title = s->host_title;
+    }
+
+    /* The inverse of psrp_host_info_null: every flag false, and real console
+     * data attached. use_runspace_host stays false because this host is the
+     * one being offered, not a redirection to the pool's. */
+    memset(&s->init.host, 0, sizeof s->init.host);
+    s->init.host.default_data = &s->host_console;
+    s->provide_host = true;
+    return PSRP_OK;
+}
+
 psrp_result_t psrp_session_send_timezone(psrp_session_t *s)
 {
     psrp_timezone_t tz;
@@ -584,6 +616,9 @@ psrp_result_t psrp_session_pipeline_payload(psrp_session_t *s,
     if (rc != PSRP_OK) return rc;
 
     psrp_create_pipeline_defaults(&opts);
+    /* A pipeline carries its own HostInfo, and the defaults make it null. A
+     * pool with a host but pipelines without one still sends nothing back. */
+    if (s->provide_host) opts.host = s->init.host;
     /* 2.2.2.10 NoInput. The defaults say "no input", which is right for the
      * common case and wrong the moment a caller intends to send some: the
      * server closes the input stream on receipt and everything later is
@@ -596,6 +631,41 @@ psrp_result_t psrp_session_pipeline_payload(psrp_session_t *s,
     psrp_buffer_free(&body);
     if (rc != PSRP_OK) return rc;
 
+    rc = pipe_add(s, &pid);
+    if (rc != PSRP_OK) return rc;
+    if (pipeline_id_out) *pipeline_id_out = pid;
+    return PSRP_OK;
+}
+
+psrp_result_t psrp_session_command_metadata_payload(
+    psrp_session_t *s,
+    const char *const *name_patterns, size_t pattern_count,
+    int32_t command_type,
+    psrp_guid_t *pipeline_id_out,
+    psrp_buffer_t *out)
+{
+    psrp_buffer_t body;
+    psrp_guid_t pid;
+    psrp_result_t rc;
+
+    if (!s || !out) return PSRP_ERR_INVALID_ARG;
+    /* 3.1.5.4.14: the pool must be Opened, same as for CREATE_PIPELINE. */
+    if (s->pool_state != PSRP_RUNSPACE_OPENED) return PSRP_ERR_STATE;
+
+    rc = psrp_guid_generate(&pid);
+    if (rc != PSRP_OK) return rc;
+
+    psrp_buffer_init(&body);
+    rc = psrp_build_get_command_metadata(name_patterns, pattern_count,
+                                         command_type, NULL, &body);
+    if (rc == PSRP_OK)
+        rc = emit(s, out, PSRP_MSG_GET_COMMAND_METADATA, &pid, body.data,
+                  body.len);
+    psrp_buffer_free(&body);
+    if (rc != PSRP_OK) return rc;
+
+    /* It is a pipeline like any other, so it belongs in the table and its
+     * state transitions arrive the same way. */
     rc = pipe_add(s, &pid);
     if (rc != PSRP_OK) return rc;
     if (pipeline_id_out) *pipeline_id_out = pid;

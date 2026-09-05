@@ -193,11 +193,25 @@ psrp_result_t psrp_build_get_command_metadata(const char *const *name_patterns,
     return rc;
 }
 
+psrp_result_t psrp_command_metadata_count_from_value(const psrp_value_t *v,
+                                                     int32_t *count)
+{
+    const psrp_value_t *c;
+
+    if (!v || !count) return PSRP_ERR_INVALID_ARG;
+    *count = -1;
+    if (v->kind != PSRP_VAL_OBJECT) return PSRP_ERR_MALFORMED;
+
+    c = psrp_object_find(v->as.obj, "Count");
+    if (!c || c->kind != PSRP_VAL_INT32) return PSRP_ERR_MALFORMED;
+    *count = c->as.i32;
+    return PSRP_OK;
+}
+
 psrp_result_t psrp_parse_command_metadata_count(const void *xml, size_t n,
                                                 int32_t *count)
 {
     psrp_value_t root;
-    const psrp_value_t *v;
     psrp_result_t rc;
 
     if (!count) return PSRP_ERR_INVALID_ARG;
@@ -205,15 +219,9 @@ psrp_result_t psrp_parse_command_metadata_count(const void *xml, size_t n,
 
     rc = root_object(xml, n, &root);
     if (rc != PSRP_OK) return rc;
-
-    v = psrp_object_find(root.as.obj, "Count");
-    if (!v || v->kind != PSRP_VAL_INT32) {
-        psrp_value_free(&root);
-        return PSRP_ERR_MALFORMED;
-    }
-    *count = v->as.i32;
+    rc = psrp_command_metadata_count_from_value(&root, count);
     psrp_value_free(&root);
-    return PSRP_OK;
+    return rc;
 }
 
 /* 2.2.3.23. `fallback_name` is the dictionary key, used when the metadata
@@ -278,15 +286,35 @@ psrp_result_t psrp_parse_command_metadata(const void *xml, size_t n,
                                           psrp_command_metadata_t *out)
 {
     psrp_value_t root;
-    const psrp_value_t *params;
     psrp_result_t rc;
 
     if (!out) return PSRP_ERR_INVALID_ARG;
+    rc = root_object(xml, n, &root);
+    if (rc != PSRP_OK) {
+        memset(out, 0, sizeof *out);
+        out->command_type = -1;
+        return rc;
+    }
+    rc = psrp_command_metadata_from_value(&root, out);
+    psrp_value_free(&root);
+    return rc;
+}
+
+psrp_result_t psrp_command_metadata_from_value(const psrp_value_t *v,
+                                               psrp_command_metadata_t *out)
+{
+    psrp_value_t root;
+    const psrp_value_t *params;
+
+    if (!v || !out) return PSRP_ERR_INVALID_ARG;
     memset(out, 0, sizeof *out);
     out->command_type = -1;
+    if (v->kind != PSRP_VAL_OBJECT) return PSRP_ERR_MALFORMED;
 
-    rc = root_object(xml, n, &root);
-    if (rc != PSRP_OK) return rc;
+    /* The rest of this function reads through `root`, which the XML entry
+     * point used to own. Borrowing rather than copying keeps the two paths
+     * identical; nothing here frees it. */
+    root = *v;
 
     out->name = text_prop(root.as.obj, "Name");
     out->command_namespace = text_prop(root.as.obj, "Namespace");
@@ -305,7 +333,6 @@ psrp_result_t psrp_parse_command_metadata(const void *xml, size_t n,
             out->parameters = (psrp_parameter_metadata_t *)
                 calloc(count, sizeof *out->parameters);
             if (!out->parameter_names || !out->parameters) {
-                psrp_value_free(&root);
                 psrp_command_metadata_free(out);
                 return PSRP_ERR_NOMEM;
             }
@@ -315,7 +342,6 @@ psrp_result_t psrp_parse_command_metadata(const void *xml, size_t n,
                 out->parameter_names[kept] = dup_n(e->key.as.text.ptr,
                                                    e->key.as.text.len);
                 if (!out->parameter_names[kept]) {
-                    psrp_value_free(&root);
                     psrp_command_metadata_free(out);
                     return PSRP_ERR_NOMEM;
                 }
@@ -325,7 +351,6 @@ psrp_result_t psrp_parse_command_metadata(const void *xml, size_t n,
                  * walking them in parallel must not have to check. */
                 if (read_parameter(&e->value, out->parameter_names[kept],
                                    &out->parameters[kept]) != PSRP_OK) {
-                    psrp_value_free(&root);
                     psrp_command_metadata_free(out);
                     return PSRP_ERR_NOMEM;
                 }
@@ -335,7 +360,6 @@ psrp_result_t psrp_parse_command_metadata(const void *xml, size_t n,
         }
     }
 
-    psrp_value_free(&root);
     if (!out->name) {           /* 2.2.3.22: Name is a non-empty string */
         psrp_command_metadata_free(out);
         return PSRP_ERR_MALFORMED;

@@ -26,6 +26,7 @@
 #define PSRP_SESSION_H
 
 #include "psrp/psrp_messages.h"
+#include "psrp/psrp_host.h"
 #include "psrp/psrp_crypto.h"
 #include "psrp/psrp_records.h"
 
@@ -107,6 +108,26 @@ const psrp_session_capability_t *psrp_session_server_capability(
  * called before psrp_session_open_payload. */
 psrp_result_t psrp_session_send_timezone(psrp_session_t *s);
 
+/* Declares that this client provides a host, so the server routes host method
+ * calls to it instead of handling them itself.
+ *
+ * Without this, every HostInfo the session sends says _isHostNull, and a
+ * server told that runs Write-Host and prompts against its own default host:
+ * the output goes nowhere the client can see and no RUNSPACEPOOL_HOST_CALL or
+ * PIPELINE_HOST_CALL ever arrives. The whole host-call path is unreachable,
+ * which is not obvious from the outside because scripts still run and still
+ * produce ordinary output.
+ *
+ * `console` describes the terminal being offered; pass NULL for a plausible
+ * headless default. It is copied. Must be called before
+ * psrp_session_open_payload, since the pool's HostInfo goes out with it.
+ *
+ * A caller that declares a host must answer the calls it receives: every
+ * PSRP_EVENT_HOST_CALL whose method returns a value needs a matching
+ * psrp_session_respond_to_host_call, or the pipeline waits forever. */
+psrp_result_t psrp_session_provide_host(psrp_session_t *s,
+                                        const psrp_host_default_data_t *console);
+
 psrp_result_t psrp_session_open_payload(psrp_session_t *s, psrp_buffer_t *out);
 
 /* ------------------- disconnect and reconnect (3.1.4.9, 3.1.4.10) ------ */
@@ -170,6 +191,21 @@ psrp_result_t psrp_session_pipeline_payload(psrp_session_t *s,
 /* Sends one object as pipeline input. The pipeline must have been created
  * with PSRP_PIPELINE_EXPECT_INPUT; otherwise the server has already closed
  * the input stream and will discard this silently. */
+/* 3.1.5.4.14 GET_COMMAND_METADATA. Sent as a pipeline, exactly like
+ * CREATE_PIPELINE: the payload goes in a RunShellCommand request and the
+ * results come back on that pipeline's output stream, first a count object and
+ * then one CommandMetadata per command. Read them with
+ * psrp_command_metadata_count_from_value and psrp_command_metadata_from_value.
+ *
+ * Passing no patterns asks for everything, which 2.2.2.14 defines as a single
+ * "*". */
+psrp_result_t psrp_session_command_metadata_payload(
+    psrp_session_t *s,
+    const char *const *name_patterns, size_t pattern_count,
+    int32_t command_type,
+    psrp_guid_t *pipeline_id_out,
+    psrp_buffer_t *out);
+
 psrp_result_t psrp_session_send_input(psrp_session_t *s,
                                       const psrp_guid_t *pipeline_id,
                                       const psrp_value_t *value);

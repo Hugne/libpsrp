@@ -37,6 +37,7 @@ The two entries left beyond those exist only to support a non-Windows port.
 | Public header self-containment | done | done | one generated TU per header, in C and C++; a build-time check, verified to fail on a broken header |
 | Fresh-clone build | done | done | clone builds and tests green on both toolchains, with live interop and stress; nothing depends on an untracked file |
 | Live pipeline input | done | done | `tests/interop/test_input.c`; the input direction had never been run against a real server |
+| Live feature coverage | done | done | `tests/interop/test_features.c`; streams, runspace controls, host calls, key exchange and command metadata, none of which had ever been run against a real server |
 | Worked example | done | done | `examples/run_command.c`, verified against a live server |
 | Differential testing vs psrpcore | done | done | both directions, 39 cases; corpus committed so ctest stays hermetic |
 
@@ -160,7 +161,7 @@ The two entries left beyond those exist only to support a non-Windows port.
 | 2.2.5.1.26 | Information Record | done | done | parse to typed fields |
 | 2.2.5.2 | Serialization of Complex Objects | done | done | serialize + deserialize, round-trip tested |
 | 2.2.5.2.1 | Referencing Earlier Objects | done | done | serialize + deserialize, round-trip tested |
-| 2.2.5.2.1.1 | RefId Attribute | done | done | serialize + deserialize, round-trip tested |
+| 2.2.5.2.1.1 | RefId Attribute | done | done | assigned by the serializer so they are unique per message (TODO PSRP-18); serialize + deserialize, round-trip tested |
 | 2.2.5.2.1.2 | <Ref> Element | done | done | serialize + deserialize, round-trip tested |
 | 2.2.5.2.2 | <Obj> Element | done | done | serialize + deserialize, round-trip tested |
 | 2.2.5.2.3 | Type Names | done | done | serialize + deserialize, round-trip tested |
@@ -270,8 +271,8 @@ The two entries left beyond those exist only to support a non-Windows port.
 | 3.1.5.4.1.1 | Sending to the Server | done | done | sent once, in the open payload; moves to NegotiationSent |
 | 3.1.5.4.1.2 | Receiving from the Server | done | done | version check; NegotiationSucceeded or Broken. See TODO PSRP-11 |
 | 3.1.5.4.2 | INIT_RUNSPACEPOOL Message | done | done | sent once, alongside SESSION_CAPABILITY |
-| 3.1.5.4.3 | PUBLIC_KEY Message | done | done | higher-layer start plus automatic reply; starts the timer |
-| 3.1.5.4.4 | ENCRYPTED_SESSION_KEY Message | done | done | installs the key and cancels the timer |
+| 3.1.5.4.3 | PUBLIC_KEY Message | done | done | live-verified; higher-layer start plus automatic reply; starts the timer |
+| 3.1.5.4.4 | ENCRYPTED_SESSION_KEY Message | done | done | live-verified; installs the key and cancels the timer |
 | 3.1.5.4.5 | PUBLIC_KEY_REQUEST Message | done | done | answered automatically, as the spec requires |
 | 3.1.5.4.6 | SET_MAX_RUNSPACES Message | done | done | requires Opened; allocates a call identifier |
 | 3.1.5.4.7 | SET_MIN_RUNSPACES Message | done | done | requires Opened; allocates a call identifier |
@@ -281,8 +282,8 @@ The two entries left beyond those exist only to support a non-Windows port.
 | 3.1.5.4.11 | GET_AVAILABLE_RUNSPACES Message | done | done | requires Opened; allocates a call identifier |
 | 3.1.5.4.12 | USER_EVENT Message | done | done | surfaced as its own event |
 | 3.1.5.4.13 | APPLICATION_PRIVATE_DATA Message | done | done | surfaced with the object intact |
-| 3.1.5.4.14 | GET_COMMAND_METADATA Message | done | done | builder plus both result parsers |
-| 3.1.5.4.15 | RUNSPACEPOOL_HOST_CALL Message | done | done | ci and method id surfaced with the parameters |
+| 3.1.5.4.14 | GET_COMMAND_METADATA Message | done | done | live-verified; builder plus both result parsers |
+| 3.1.5.4.15 | RUNSPACEPOOL_HOST_CALL Message | done | done | live-verified; ci and method id surfaced with the parameters |
 | 3.1.5.4.16 | RUNSPACEPOOL_HOST_RESPONSE Message | done | done | quotes the call's ci; goes out on the pr stream |
 | 3.1.5.4.17 | PIPELINE_INPUT Message | done | done | refused unless the pipeline is Running; live-verified, incl. a payload spanning fragments |
 | 3.1.5.4.18 | END_OF_PIPELINE_INPUT Message | done | done | refused unless the pipeline is Running; live-verified |
@@ -294,7 +295,7 @@ The two entries left beyond those exist only to support a non-Windows port.
 | 3.1.5.4.24 | WARNING_RECORD Message | done | done | surfaced as an event |
 | 3.1.5.4.25 | PROGRESS_RECORD Message | done | done | surfaced as an event |
 | 3.1.5.4.26 | INFORMATION_RECORD Message | done | done | surfaced as an event |
-| 3.1.5.4.27 | PIPELINE_HOST_CALL Message | done | done | ci and method id surfaced with the parameters |
+| 3.1.5.4.27 | PIPELINE_HOST_CALL Message | done | done | live-verified; ci and method id surfaced with the parameters |
 | 3.1.5.4.28 | PIPELINE_HOST_RESPONSE Message | done | done | quotes the call's ci; goes out on the pr stream |
 | 3.1.5.4.29 | CONNECT_RUNSPACEPOOL Message | done | done | sent once, with SESSION_CAPABILITY, from Connecting |
 | 3.1.5.4.30 | RUNSPACEPOOL_INIT_DATA Message | done | done | surfaced with the server's actual bounds |

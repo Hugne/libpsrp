@@ -289,6 +289,10 @@ PSRP_TEST(write_list_with_type_ref)
     psrp_value_init(&v);
     psrp_value_init(&wrapper);
 
+    /* The stored ref id only asks for an identifier; the serializer picks the
+     * value, so this object is numbered 0 as the first one in the document.
+     * The TNRef points at a type list declared elsewhere, which this fragment
+     * does not contain, so it passes through unchanged. */
     psrp_object_set_ref_id(o, 1);
     psrp_object_set_type_ref_id(o, 0);   /* no names -> <TNRef> */
     psrp_object_set_container(o, PSRP_CONTAINER_LIST);
@@ -299,7 +303,7 @@ PSRP_TEST(write_list_with_type_ref)
 
     ASSERT_OK(psrp_value_set_object(&wrapper, o));
     check_xml(&wrapper,
-        "<Obj RefId=\"1\"><TNRef RefId=\"0\" />"
+        "<Obj RefId=\"0\"><TNRef RefId=\"0\" />"
         "<LST><I32>1</I32><I32>2</I32><I32>3</I32></LST></Obj>");
     psrp_value_free(&wrapper);
 }
@@ -545,6 +549,127 @@ PSRP_TEST(ref_ids_restart_for_every_message)
     psrp_value_free(&v);
 }
 
+PSRP_TEST(ref_ids_are_unique_across_a_nested_document)
+{
+    /* 2.2.5.2.1.1: an object identifier MUST be unique for the serializer's
+     * lifetime, which 2.2.5.3.3 makes one message. Leaving that to the
+     * builders did not work. Each of them numbered from zero, because a
+     * nested builder cannot know what the document around it has used, so
+     * real messages went out with several different objects all claiming
+     * RefId 0. This builds the same shape and checks every identifier is
+     * distinct. */
+    psrp_object_t *root = psrp_object_new();
+    psrp_object_t *mid = psrp_object_new();
+    psrp_object_t *leaf = psrp_object_new();
+    psrp_value_t v, wrapper;
+    psrp_buffer_t out;
+    size_t i, seen = 0;
+    int ids[8];
+
+    ASSERT_NOT_NULL(root);
+    ASSERT_NOT_NULL(mid);
+    ASSERT_NOT_NULL(leaf);
+
+    /* Every builder asks for id 0, exactly as the real ones did. */
+    psrp_object_set_ref_id(leaf, 0);
+    psrp_value_init(&v);
+    ASSERT_OK(psrp_value_set_string(&v, "x"));
+    ASSERT_OK(psrp_object_add_extended(leaf, "leaf", &v));
+    psrp_value_free(&v);
+
+    psrp_object_set_ref_id(mid, 0);
+    psrp_value_init(&v);
+    ASSERT_OK(psrp_value_set_object(&v, leaf));
+    ASSERT_OK(psrp_object_add_extended(mid, "inner", &v));
+    psrp_value_free(&v);
+
+    psrp_object_set_ref_id(root, 0);
+    psrp_value_init(&v);
+    ASSERT_OK(psrp_value_set_object(&v, mid));
+    ASSERT_OK(psrp_object_add_extended(root, "outer", &v));
+    psrp_value_free(&v);
+
+    psrp_value_init(&wrapper);
+    ASSERT_OK(psrp_value_set_object(&wrapper, root));
+    psrp_buffer_init(&out);
+    ASSERT_OK(psrp_clixml_serialize(&wrapper, &out));
+
+    /* Collect every RefId the document emitted. */
+    for (i = 0; i + 8 <= out.len; i++) {
+        if (memcmp(out.data + i, "RefId=\"", 7) == 0) {
+            int id = 0;
+            size_t j = i + 7;
+            while (j < out.len && out.data[j] >= '0' && out.data[j] <= '9') {
+                id = id * 10 + (out.data[j] - '0');
+                j++;
+            }
+            ASSERT_TRUE(seen < sizeof ids / sizeof ids[0]);
+            ids[seen++] = id;
+        }
+    }
+    ASSERT_EQ_SZ(seen, 3u);
+    ASSERT_TRUE(ids[0] != ids[1] && ids[1] != ids[2] && ids[0] != ids[2]);
+
+    psrp_buffer_free(&out);
+    psrp_value_free(&wrapper);
+}
+
+PSRP_TEST(a_type_ref_follows_its_declaration)
+{
+    /* Type identifiers are renumbered too, but unlike object identifiers they
+     * are actually pointed at: an object with no type names of its own refers
+     * back with <TNRef>. Renumbering the declaration without following it
+     * through the reference would aim it at the wrong list. */
+    psrp_object_t *list = psrp_object_new();
+    psrp_object_t *first = psrp_object_new();
+    psrp_object_t *second = psrp_object_new();
+    psrp_value_t v, wrapper;
+    psrp_buffer_t out;
+    const char *tn, *tnref;
+    int tn_id = -1, tnref_id = -1;
+
+    ASSERT_NOT_NULL(list);
+    ASSERT_NOT_NULL(first);
+    ASSERT_NOT_NULL(second);
+
+    psrp_object_set_ref_id(list, 0);
+    psrp_object_set_container(list, PSRP_CONTAINER_LIST);
+
+    /* The first declares the type list under its own stored id; the second
+     * carries no names and refers back to it. */
+    psrp_object_set_ref_id(first, 0);
+    psrp_object_set_type_ref_id(first, 7);
+    ASSERT_OK(psrp_object_add_type_name(first, "Some.Type"));
+
+    psrp_object_set_ref_id(second, 0);
+    psrp_object_set_type_ref_id(second, 7);
+
+    psrp_value_init(&v);
+    ASSERT_OK(psrp_value_set_object(&v, first));
+    ASSERT_OK(psrp_object_add_item(list, &v));
+    psrp_value_free(&v);
+    ASSERT_OK(psrp_value_set_object(&v, second));
+    ASSERT_OK(psrp_object_add_item(list, &v));
+    psrp_value_free(&v);
+
+    psrp_value_init(&wrapper);
+    ASSERT_OK(psrp_value_set_object(&wrapper, list));
+    psrp_buffer_init(&out);
+    ASSERT_OK(psrp_clixml_serialize(&wrapper, &out));
+    ASSERT_OK(psrp_buffer_append_u8(&out, 0));
+
+    tn = strstr((const char *)out.data, "<TN RefId=\"");
+    tnref = strstr((const char *)out.data, "<TNRef RefId=\"");
+    ASSERT_NOT_NULL(tn);
+    ASSERT_NOT_NULL(tnref);
+    tn_id = atoi(tn + strlen("<TN RefId=\""));
+    tnref_id = atoi(tnref + strlen("<TNRef RefId=\""));
+    ASSERT_EQ_I(tnref_id, tn_id);
+
+    psrp_buffer_free(&out);
+    psrp_value_free(&wrapper);
+}
+
 static const psrp_test_case_t cases[] = {
     PSRP_TEST_CASE(write_null_is_self_closing),
     PSRP_TEST_CASE(write_bool),
@@ -575,6 +700,8 @@ static const psrp_test_case_t cases[] = {
     PSRP_TEST_CASE(kind_element_lookup_roundtrips),
     PSRP_TEST_CASE(object_find_prefers_extended),
     PSRP_TEST_CASE(ref_ids_restart_for_every_message),
+    PSRP_TEST_CASE(ref_ids_are_unique_across_a_nested_document),
+    PSRP_TEST_CASE(a_type_ref_follows_its_declaration),
 };
 
 PSRP_TEST_MAIN(cases)

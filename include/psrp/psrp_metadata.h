@@ -56,6 +56,15 @@ psrp_result_t psrp_build_get_command_metadata(const char *const *name_patterns,
 psrp_result_t psrp_parse_command_metadata_count(const void *xml, size_t n,
                                                 int32_t *count);
 
+/* The same, from an already-deserialized object.
+ *
+ * Results arrive on the pipeline's output stream, so a caller sees them as
+ * PSRP_EVENT_PIPELINE_OUTPUT with a parsed value, never as raw XML. Without
+ * these the XML-taking versions above could not be applied to what the session
+ * actually hands over. */
+psrp_result_t psrp_command_metadata_count_from_value(const psrp_value_t *v,
+                                                     int32_t *count);
+
 /* 2.2.3.23 ParameterMetadata, one per parameter a command accepts. */
 typedef struct psrp_parameter_metadata {
     char *name;            /* a non-empty String per the spec */
@@ -82,6 +91,8 @@ typedef struct psrp_command_metadata {
 
 psrp_result_t psrp_parse_command_metadata(const void *xml, size_t n,
                                           psrp_command_metadata_t *out);
+psrp_result_t psrp_command_metadata_from_value(const psrp_value_t *v,
+                                               psrp_command_metadata_t *out);
 void psrp_command_metadata_free(psrp_command_metadata_t *m);
 
 /* 2.2.2.12 USER_EVENT. The property names really do contain dots, e.g.
