@@ -25,6 +25,60 @@ another pipeline through the same pool:
     shell closed
 ```
 
+## What it talks to
+
+The client announces protocol version 2.2, PSVersion 2.0 and serialization
+version 1.1.0.1, which is what every PowerShell since 3.0 speaks. It accepts a
+server announcing protocol major 2, minor 1 or above.
+
+| Server | Protocol | Status |
+|---|---|---|
+| Windows PowerShell 5.1 | 2.3 | verified live, continuously |
+| Windows PowerShell 3.0 / 4.0 | 2.2 | expected; not verified here |
+| PowerShell 7.x | 2.3 (2.4 in 7.6) | expected; not verified here |
+| Windows PowerShell 2.0 | 2.1 | expected to negotiate; untested, and see the gated features below |
+
+Only the 5.1 row is measured. Everything in `tests/interop` runs against a
+Windows PowerShell 5.1 endpoint (5.1.26100.9168) on every change; the other
+rows are inferences from the protocol versions those releases speak, not
+claims of testing.
+
+A server picks the version, within limits: PowerShell echoes the client's
+protocol version back whenever it is 2.0 to 2.3. Because this client offers
+2.2, a modern server answers 2.2 even though it could do more. Its real ceiling
+is only visible by offering something higher — patching the offer to 2.4 makes
+a 5.1 server answer with its true 2.3.
+
+Three messages are gated on the negotiated version, so against an old server
+the corresponding calls will fail rather than silently do nothing:
+
+- `INFORMATION_RECORD` (2.2.2.26) needs 2.3. Below that, `Write-Information`
+  has no stream to arrive on.
+- `CONNECT_RUNSPACEPOOL` and `RUNSPACEPOOL_INIT_DATA` (2.2.2.29, 2.2.2.30) need
+  2.2, so adopting another client's disconnected pool does not exist on
+  PowerShell 2.0.
+- `RESET_RUNSPACE_STATE` (2.2.2.31) needs 2.3; the spec's product note lists
+  everything from Windows 7 through Windows Server 2012 R2 as lacking it. The
+  5.1 server here honours it even though it negotiated 2.2 with us, so it gates
+  on its own 2.3 capability rather than on the negotiated version. Do not read
+  that as a guarantee.
+
+Raising the announced version is not just a constant: protocol 2.4 (PowerShell
+7.6) deprecates the session key exchange, so the crypto path would have to
+become conditional on what was negotiated. See TODO PSRP-28.
+
+## Requirements
+
+Windows only, and deliberately so: the transport is the Win32 WSMan client
+(`WsmSvc`), XML is XmlLite, crypto is CNG (`bcrypt`), and shell enumeration
+uses the WSMan COM automation interface (`ole32`, `oleaut32`). Porting off
+Windows means replacing the transport and the XML backend together — see TODO
+PSRP-03 and PSRP-05.
+
+Building needs CMake 3.20+, Ninja, and a C11 compiler; MSVC and clang are both
+kept green, with warnings as errors. The interop tests additionally need a
+reachable WinRM listener and credentials, and skip themselves without them.
+
 ## Example
 
 `examples/run_command.c` is the whole shape of using the library in about a
