@@ -11,6 +11,16 @@ set(CMAKE_C_EXTENSIONS OFF)
 option(PSRP_WERROR "Treat warnings as errors" ON)
 option(PSRP_BUILD_TESTS "Build the test suite" ON)
 
+# Static linking is offered per library rather than as one switch, because the
+# two are not equally available: libxml2 ships a usable archive nearly
+# everywhere, while a static libcrypto depends on the distribution having
+# packaged archives for OpenSSL's own private dependencies, which Ubuntu does
+# not. One combined flag would have made the easy half unavailable because of
+# the hard half. Both are non-Windows only; on Windows the XML and crypto
+# backends are OS components with nothing to link statically.
+option(PSRP_STATIC_LIBXML2 "Link libxml2 from its static archive" OFF)
+option(PSRP_STATIC_OPENSSL "Link libcrypto from its static archive" OFF)
+
 # Warnings are part of the contract: both toolchains stay green.
 add_library(psrp_flags INTERFACE)
 if(MSVC)
@@ -99,7 +109,55 @@ else()
     src/platform/random_posix.c
     src/crypto/crypto_openssl.c
   )
-  target_link_libraries(psrp PUBLIC PkgConfig::LIBXML2 PkgConfig::OPENSSL)
+
+  # The archives are linked by absolute path rather than by asking pkg-config
+  # for a static link line. Naming a library with -l leaves the choice to the
+  # linker, which prefers the .so sitting next to the .a, so a build asking
+  # for static would quietly get dynamic. A path cannot be misread.
+  #
+  # An archive also records none of its own dependencies, so what the shared
+  # build picks up transitively has to be named here: libm for libxml2's
+  # schema types (floor, trunc), and zlib and zstd for the compression both
+  # libraries can use.
+  if(PSRP_STATIC_LIBXML2)
+    find_library(LIBXML2_ARCHIVE NAMES libxml2.a REQUIRED)
+    target_link_libraries(psrp PUBLIC ${LIBXML2_ARCHIVE} m z)
+    target_include_directories(psrp SYSTEM PRIVATE ${LIBXML2_INCLUDE_DIRS})
+  else()
+    target_link_libraries(psrp PUBLIC PkgConfig::LIBXML2)
+  endif()
+
+  if(PSRP_STATIC_OPENSSL)
+    find_library(OPENSSL_ARCHIVE NAMES libcrypto.a REQUIRED)
+    set(PSRP_OPENSSL_STATIC_LIBS ${OPENSSL_ARCHIVE} z zstd dl pthread)
+
+    # Whether that archive can actually be linked depends on the packaging of
+    # OpenSSL's private dependencies, and the usual failure is a wall of
+    # undefined jent_* symbols at link time because the distribution built
+    # OpenSSL against jitterentropy without shipping libjitterentropy.a.
+    # Finding that out at configure time, with a name attached, beats finding
+    # it out in the middle of a build.
+    include(CheckCSourceCompiles)
+    set(CMAKE_REQUIRED_LIBRARIES ${PSRP_OPENSSL_STATIC_LIBS})
+    check_c_source_compiles(
+      "#include <openssl/evp.h>
+int main(void){return EVP_aes_256_cbc()?0:1;}"
+      PSRP_STATIC_OPENSSL_LINKS)
+    unset(CMAKE_REQUIRED_LIBRARIES)
+    if(NOT PSRP_STATIC_OPENSSL_LINKS)
+      message(FATAL_ERROR
+        "PSRP_STATIC_OPENSSL=ON but ${OPENSSL_ARCHIVE} will not link. "
+        "OpenSSL's own private dependencies are probably missing their static "
+        "archives -- on Debian and Ubuntu libjitterentropy.a is not packaged "
+        "at all, which makes a static libcrypto unbuildable there. Use "
+        "PSRP_STATIC_LIBXML2 alone, or build against an OpenSSL whose "
+        "dependencies ship archives.")
+    endif()
+    target_link_libraries(psrp PUBLIC ${PSRP_OPENSSL_STATIC_LIBS})
+    target_include_directories(psrp SYSTEM PRIVATE ${OPENSSL_INCLUDE_DIRS})
+  else()
+    target_link_libraries(psrp PUBLIC PkgConfig::OPENSSL)
+  endif()
   set(PSRP_HAVE_TRANSPORT OFF CACHE INTERNAL "")
 endif()
 

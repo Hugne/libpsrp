@@ -82,6 +82,25 @@ is *absent* rather than faked -- `psrp_client` and the WSMan transport do not
 exist there at all. Enough to speak PSRP; not yet enough to connect. See TODO
 PSRP-03.
 
+On Linux the two dependencies can be linked from their static archives, one
+flag per library:
+
+    cmake -S . -B build -DPSRP_STATIC_LIBXML2=ON     # no libxml2.so at runtime
+    cmake -S . -B build -DPSRP_STATIC_OPENSSL=ON
+
+They are separate flags because the two are not equally available. libxml2
+links statically almost anywhere. A static libcrypto needs the distribution to
+have packaged archives for OpenSSL's *own* private dependencies, and Debian
+and Ubuntu do not ship `libjitterentropy.a` at all, which makes it unbuildable
+there; `PSRP_STATIC_OPENSSL` detects that during configure and says so, rather
+than producing a wall of undefined `jent_*` symbols at link time. A single
+combined flag would have made the easy half unavailable because of the hard
+half.
+
+Neither produces a fully static binary: libc stays dynamic, deliberately,
+since statically linking glibc breaks NSS and locale lookups at run time.
+What they remove is the dependencies this library chose.
+
 Building needs CMake 3.20+, Ninja, and a C11 compiler; MSVC and clang are both
 kept green, with warnings as errors. The interop tests additionally need a
 reachable WinRM listener and credentials, and skip themselves without them.
