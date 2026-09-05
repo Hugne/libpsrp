@@ -1629,6 +1629,79 @@ PSRP_TEST(a_bad_pipeline_message_stops_only_that_pipeline)
     psrp_session_free(s);
 }
 
+PSRP_TEST(outgoing_bytes_are_queued_per_destination)
+{
+    /* Two pipelines' input and a pool request must come out separable, or a
+     * transport running both pipelines cannot send each its own input. The
+     * aggregate take still works, pool first, for the one-at-a-time case. */
+    psrp_session_t *s = psrp_session_new();
+    psrp_guid_t a, b, seen_pid;
+    psrp_command_t *cmd;
+    psrp_buffer_t wire, part;
+    psrp_value_t v;
+    psrp_message_t msgs[4];
+    psrp_buffer_t bodies[4];
+    size_t n, cursor = 0, pending = 0;
+    bool seen_priority;
+    int64_t ci;
+
+    ASSERT_NOT_NULL(s);
+    open_pool(s);
+    psrp_buffer_init(&wire);
+    cmd = psrp_command_new("x", true);
+    ASSERT_NOT_NULL(cmd);
+    ASSERT_OK(psrp_session_pipeline_payload(s, &cmd, 1, PSRP_PIPELINE_EXPECT_INPUT,
+                                            &a, &wire));
+    psrp_buffer_reset(&wire);
+    ASSERT_OK(psrp_session_pipeline_payload(s, &cmd, 1, PSRP_PIPELINE_EXPECT_INPUT,
+                                            &b, &wire));
+    psrp_buffer_free(&wire);
+    psrp_command_free(cmd);
+
+    psrp_value_init(&v);
+    ASSERT_OK(psrp_value_set_string(&v, "for-a"));
+    ASSERT_OK(psrp_session_send_input(s, &a, &v));
+    ASSERT_OK(psrp_value_set_string(&v, "for-b"));
+    ASSERT_OK(psrp_session_send_input(s, &b, &v));
+    psrp_value_free(&v);
+    ASSERT_OK(psrp_session_get_available_runspaces(s, &ci));
+
+    /* Three destinations have something queued. */
+    while (psrp_session_next_pending(s, &cursor, &seen_pid, &seen_priority))
+        pending++;
+    ASSERT_EQ_SZ(pending, 3u);
+
+    /* Pipeline a's queue holds exactly its input, addressed to it. */
+    psrp_buffer_init(&part);
+    ASSERT_OK(psrp_session_take_output_for(s, &a, false, &part));
+    n = decode_all(&part, msgs, bodies, 4);
+    ASSERT_EQ_SZ(n, 1u);
+    ASSERT_EQ_SZ(msgs[0].type, PSRP_MSG_PIPELINE_INPUT);
+    ASSERT_TRUE(psrp_guid_equal(&msgs[0].pid, &a));
+    free_bodies(bodies, n);
+    psrp_buffer_free(&part);
+    /* And it is now empty. */
+    psrp_buffer_init(&part);
+    ASSERT_ERR(psrp_session_take_output_for(s, &a, false, &part), PSRP_ERR_NOT_FOUND);
+    psrp_buffer_free(&part);
+
+    /* The aggregate drains the rest, pool first. */
+    psrp_buffer_init(&part);
+    ASSERT_OK(psrp_session_take_output(s, &part));
+    n = decode_all(&part, msgs, bodies, 4);
+    ASSERT_EQ_SZ(n, 2u);
+    ASSERT_EQ_SZ(msgs[0].type, PSRP_MSG_GET_AVAILABLE_RUNSPACES);
+    ASSERT_EQ_SZ(msgs[1].type, PSRP_MSG_PIPELINE_INPUT);
+    ASSERT_TRUE(psrp_guid_equal(&msgs[1].pid, &b));
+    free_bodies(bodies, n);
+    psrp_buffer_free(&part);
+    psrp_buffer_init(&part);
+    ASSERT_ERR(psrp_session_take_output(s, &part), PSRP_ERR_NOT_FOUND);
+    psrp_buffer_free(&part);
+
+    psrp_session_free(s);
+}
+
 static const psrp_test_case_t cases[] = {
     PSRP_TEST_CASE(session_starts_before_open_with_a_pool_id),
     PSRP_TEST_CASE(session_pool_ids_are_unique),
@@ -1640,6 +1713,7 @@ static const psrp_test_case_t cases[] = {
     PSRP_TEST_CASE(pipeline_payload_addresses_a_new_pipeline),
     PSRP_TEST_CASE(pipeline_payload_requires_commands),
     PSRP_TEST_CASE(pipeline_input_and_end_of_input),
+    PSRP_TEST_CASE(outgoing_bytes_are_queued_per_destination),
     PSRP_TEST_CASE(pipeline_output_and_state_events),
     PSRP_TEST_CASE(record_streams_become_events),
     PSRP_TEST_CASE(unknown_message_is_surfaced),

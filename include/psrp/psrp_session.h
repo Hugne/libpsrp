@@ -279,7 +279,25 @@ uint32_t psrp_session_key_timeout(const psrp_session_t *s);
  * the closure the spec requires. Harmless to call when no timer is running. */
 psrp_result_t psrp_session_tick(psrp_session_t *s, uint32_t elapsed_ms);
 
+/* Everything queued for the ordinary stream, every destination, pool first.
+ * Enough for a transport that runs one pipeline at a time, where the
+ * destination does not matter. A transport running several pipelines needs
+ * to know which bytes go to which command, and uses the per-destination
+ * calls below instead. */
 psrp_result_t psrp_session_take_output(psrp_session_t *s, psrp_buffer_t *out);
+
+/* The bytes queued for one destination: the pool when `pipeline_id` is NULL,
+ * else that pipeline; on the priority stream when `priority` is set. Returns
+ * PSRP_ERR_NOT_FOUND when that queue is empty. */
+psrp_result_t psrp_session_take_output_for(psrp_session_t *s,
+                                           const psrp_guid_t *pipeline_id,
+                                           bool priority, psrp_buffer_t *out);
+
+/* Walks the destinations with something queued. Start with *cursor = 0 and
+ * call until it returns false; each true fills in one destination whose
+ * queue is non-empty. `pipeline_id` is the empty GUID for the pool. */
+bool psrp_session_next_pending(const psrp_session_t *s, size_t *cursor,
+                               psrp_guid_t *pipeline_id, bool *priority);
 
 /* Answers a host call. `pipeline_id` selects PIPELINE_HOST_RESPONSE when
  * non-NULL and RUNSPACEPOOL_HOST_RESPONSE otherwise, matching the call that

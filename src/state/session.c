@@ -66,8 +66,18 @@ struct psrp_session {
     bool connecting;
 
     psrp_defrag_t *defrag;
-    psrp_buffer_t outgoing;
-    psrp_buffer_t outgoing_pr;   /* host responses; the WSMan "pr" stream */
+
+    /* Outgoing bytes, one queue per destination. A destination is the pool
+     * or one pipeline, on the ordinary stream or the priority ("pr") one.
+     * Keeping them apart is what lets a transport that runs several pipelines
+     * at once send each pipeline's input to that pipeline's command; a single
+     * shared queue could not say which bytes belonged to whom. */
+    struct out_queue {
+        psrp_guid_t pid;        /* empty for the pool */
+        bool priority;
+        psrp_buffer_t buf;
+    } *queues;
+    size_t queue_count;
 
     /* 2.2.4: ObjectId must be greater than zero and unique within the pool. */
     uint64_t next_object_id;
@@ -137,8 +147,6 @@ psrp_session_t *psrp_session_new(void)
     s->defrag = psrp_defrag_new();
     if (!s->defrag) { free(s); return NULL; }
 
-    psrp_buffer_init(&s->outgoing);
-    psrp_buffer_init(&s->outgoing_pr);
     psrp_buffer_init(&s->timezone_blob);
     s->pool_state = PSRP_RUNSPACE_BEFORE_OPEN;
     s->next_object_id = 1;      /* ObjectId 0 is illegal */
@@ -172,10 +180,48 @@ void psrp_session_free(psrp_session_t *s)
     }
     psrp_crypto_free(s->crypto);
     psrp_defrag_free(s->defrag);
-    psrp_buffer_free(&s->outgoing);
-    psrp_buffer_free(&s->outgoing_pr);
+    {
+        size_t i;
+        for (i = 0; i < s->queue_count; i++) psrp_buffer_free(&s->queues[i].buf);
+        free(s->queues);
+    }
     psrp_buffer_free(&s->timezone_blob);
     free(s);
+}
+
+/* --------------------------------------------- outgoing queues ---------- */
+
+/* The queue for one destination, created on first use. */
+static psrp_buffer_t *queue_for(psrp_session_t *s, const psrp_guid_t *pid,
+                                bool priority)
+{
+    psrp_guid_t key = pid ? *pid : psrp_guid_empty;
+    size_t i;
+    struct out_queue *grown;
+
+    for (i = 0; i < s->queue_count; i++)
+        if (s->queues[i].priority == priority &&
+            psrp_guid_equal(&s->queues[i].pid, &key))
+            return &s->queues[i].buf;
+
+    grown = (struct out_queue *)realloc(
+        s->queues, (s->queue_count + 1) * sizeof *grown);
+    if (!grown) return NULL;
+    s->queues = grown;
+    s->queues[s->queue_count].pid = key;
+    s->queues[s->queue_count].priority = priority;
+    psrp_buffer_init(&s->queues[s->queue_count].buf);
+    return &s->queues[s->queue_count++].buf;
+}
+
+/* Queues a message for a destination. */
+static psrp_result_t emit_queued(psrp_session_t *s, uint32_t type,
+                                 const psrp_guid_t *pipeline_id, bool priority,
+                                 const void *data, size_t len)
+{
+    psrp_buffer_t *q = queue_for(s, pipeline_id, priority);
+    if (!q) return PSRP_ERR_NOMEM;
+    return emit(s, q, type, pipeline_id, data, len);
 }
 
 /* ------------------------------- session key exchange (3.1.5.4.3-5) ----- */
@@ -215,8 +261,8 @@ static psrp_result_t send_public_key(psrp_session_t *s)
     psrp_buffer_init(&body);
     rc = psrp_build_public_key(s->crypto, &body);
     if (rc == PSRP_OK)
-        rc = emit(s, &s->outgoing, PSRP_MSG_PUBLIC_KEY, NULL, body.data,
-                  body.len);
+        rc = emit_queued(s, PSRP_MSG_PUBLIC_KEY, NULL, false, body.data,
+                         body.len);
     psrp_buffer_free(&body);
     if (rc != PSRP_OK) return rc;
 
@@ -699,8 +745,8 @@ psrp_result_t psrp_session_send_input(psrp_session_t *s,
     psrp_buffer_init(&body);
     rc = psrp_build_pipeline_input(value, &body);
     if (rc == PSRP_OK)
-        rc = emit(s, &s->outgoing, PSRP_MSG_PIPELINE_INPUT, pipeline_id,
-                  body.data, body.len);
+        rc = emit_queued(s, PSRP_MSG_PIPELINE_INPUT, pipeline_id, false,
+                         body.data, body.len);
     psrp_buffer_free(&body);
     return rc;
 }
@@ -712,8 +758,8 @@ psrp_result_t psrp_session_end_input(psrp_session_t *s,
     /* 3.1.5.4.18: only while the pipeline is Running. */
     if (!pipeline_is_running(s, pipeline_id)) return PSRP_ERR_STATE;
     /* 2.2.2.18: the Data field is empty. */
-    return emit(s, &s->outgoing, PSRP_MSG_END_OF_PIPELINE_INPUT, pipeline_id,
-                NULL, 0);
+    return emit_queued(s, PSRP_MSG_END_OF_PIPELINE_INPUT, pipeline_id, false,
+                       NULL, 0);
 }
 
 /* ------------------------------------------- RunspacePool operations ---- */
@@ -742,7 +788,7 @@ static psrp_result_t pool_request(psrp_session_t *s, uint32_t type,
     psrp_buffer_init(&body);
     rc = build(ci, arg, &body);
     if (rc == PSRP_OK)
-        rc = emit(s, &s->outgoing, type, NULL, body.data, body.len);
+        rc = emit_queued(s, type, NULL, false, body.data, body.len);
     psrp_buffer_free(&body);
 
     /* Leaving a call identifier in the table for a message that never went
@@ -787,25 +833,78 @@ psrp_result_t psrp_session_reset_runspace_state(psrp_session_t *s,
                         ci_out);
 }
 
+/* Drains every non-empty queue matching `priority` into `out`, pool first. */
+static psrp_result_t take_all(psrp_session_t *s, bool priority,
+                              psrp_buffer_t *out)
+{
+    size_t i;
+    bool any = false;
+    psrp_result_t rc = PSRP_OK;
+
+    if (!s || !out) return PSRP_ERR_INVALID_ARG;
+    /* Pool traffic first: a pipeline's input should never overtake the
+     * message that set the pool up to receive it. */
+    for (i = 0; i < s->queue_count && rc == PSRP_OK; i++) {
+        struct out_queue *q = &s->queues[i];
+        if (q->priority != priority || !psrp_guid_is_empty(&q->pid)) continue;
+        if (q->buf.len == 0) continue;
+        rc = psrp_buffer_append(out, q->buf.data, q->buf.len);
+        if (rc == PSRP_OK) { psrp_buffer_reset(&q->buf); any = true; }
+    }
+    for (i = 0; i < s->queue_count && rc == PSRP_OK; i++) {
+        struct out_queue *q = &s->queues[i];
+        if (q->priority != priority || psrp_guid_is_empty(&q->pid)) continue;
+        if (q->buf.len == 0) continue;
+        rc = psrp_buffer_append(out, q->buf.data, q->buf.len);
+        if (rc == PSRP_OK) { psrp_buffer_reset(&q->buf); any = true; }
+    }
+    if (rc != PSRP_OK) return rc;
+    return any ? PSRP_OK : PSRP_ERR_NOT_FOUND;
+}
+
 psrp_result_t psrp_session_take_output(psrp_session_t *s, psrp_buffer_t *out)
 {
-    psrp_result_t rc;
-    if (!s || !out) return PSRP_ERR_INVALID_ARG;
-    if (s->outgoing.len == 0) return PSRP_ERR_NOT_FOUND;
-    rc = psrp_buffer_append(out, s->outgoing.data, s->outgoing.len);
-    if (rc == PSRP_OK) psrp_buffer_reset(&s->outgoing);
-    return rc;
+    return take_all(s, false, out);
 }
 
 psrp_result_t psrp_session_take_priority_output(psrp_session_t *s,
                                                 psrp_buffer_t *out)
 {
-    psrp_result_t rc;
+    return take_all(s, true, out);
+}
+
+psrp_result_t psrp_session_take_output_for(psrp_session_t *s,
+                                           const psrp_guid_t *pipeline_id,
+                                           bool priority, psrp_buffer_t *out)
+{
+    psrp_guid_t key = pipeline_id ? *pipeline_id : psrp_guid_empty;
+    size_t i;
+
     if (!s || !out) return PSRP_ERR_INVALID_ARG;
-    if (s->outgoing_pr.len == 0) return PSRP_ERR_NOT_FOUND;
-    rc = psrp_buffer_append(out, s->outgoing_pr.data, s->outgoing_pr.len);
-    if (rc == PSRP_OK) psrp_buffer_reset(&s->outgoing_pr);
-    return rc;
+    for (i = 0; i < s->queue_count; i++) {
+        struct out_queue *q = &s->queues[i];
+        psrp_result_t rc;
+        if (q->priority != priority || !psrp_guid_equal(&q->pid, &key)) continue;
+        if (q->buf.len == 0) return PSRP_ERR_NOT_FOUND;
+        rc = psrp_buffer_append(out, q->buf.data, q->buf.len);
+        if (rc == PSRP_OK) psrp_buffer_reset(&q->buf);
+        return rc;
+    }
+    return PSRP_ERR_NOT_FOUND;
+}
+
+bool psrp_session_next_pending(const psrp_session_t *s, size_t *cursor,
+                               psrp_guid_t *pipeline_id, bool *priority)
+{
+    if (!s || !cursor) return false;
+    while (*cursor < s->queue_count) {
+        const struct out_queue *q = &s->queues[(*cursor)++];
+        if (q->buf.len == 0) continue;
+        if (pipeline_id) *pipeline_id = q->pid;
+        if (priority) *priority = q->priority;
+        return true;
+    }
+    return false;
 }
 
 psrp_result_t psrp_session_respond_to_host_call(psrp_session_t *s,
@@ -834,7 +933,7 @@ psrp_result_t psrp_session_respond_to_host_call(psrp_session_t *s,
     type = pipeline_id ? PSRP_MSG_PIPELINE_HOST_RESPONSE
                        : PSRP_MSG_RUNSPACEPOOL_HOST_RESPONSE;
     if (rc == PSRP_OK)
-        rc = emit(s, &s->outgoing_pr, type, pipeline_id, body.data, body.len);
+        rc = emit_queued(s, type, pipeline_id, true, body.data, body.len);
     psrp_buffer_free(&body);
     return rc;
 }
