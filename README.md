@@ -216,8 +216,8 @@ To run the live test:
   itself and the suite connects to `localhost:5985` as the current user over
   Negotiate, so no credential is stored anywhere. This is the job worth having:
   unit tests prove an encoding, and only a real server proves a feature is
-  reachable. It is marked `continue-on-error` until it has actually been seen
-  to pass on a hosted runner -- see TODO PSRP-31.
+  reachable. It gates like any other job: verified passing on a hosted runner
+  before being trusted (TODO PSRP-31).
 
 `.github/workflows/docs.yml` publishes the API reference to GitHub Pages.
 

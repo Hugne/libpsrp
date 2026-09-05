@@ -59,10 +59,9 @@ jobs:
     name: interop (live WinRM)
     runs-on: windows-latest
     # Unit tests prove an encoding; only a live server proves a feature is
-    # reachable. The runner can be its own PSRP server, so drive the interop
-    # suite against localhost. Allowed to fail while this is still being
-    # proven out on hosted runners -- see TODO PSRP-31.
-    continue-on-error: true
+    # reachable. The runner is its own PSRP server: it enables remoting on
+    # itself and the suite drives it over localhost. Observed passing on a
+    # hosted runner, so this gates like any other job (PSRP-31).
     steps:
       - uses: actions/checkout@v4
 
