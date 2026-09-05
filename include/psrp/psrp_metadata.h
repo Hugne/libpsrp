@@ -38,8 +38,12 @@ const char *psrp_command_type_name(int32_t command_type);
  * character is a backtick rather than a backslash. Passing none sends Null,
  * which the spec defines as meaning a single "*".
  *
- * Namespace is sent as Null; the spec gives Null the same meaning as a list
- * with one empty string, so there is nothing to lose.
+ * `namespaces` are the 2.2.2.14 Namespace list: module names to search.
+ * Passing none sends Null, which the spec defines as a list holding one empty
+ * string. Measured against Windows PowerShell that is not "any module": "*"
+ * returns everything and an exact name is found wherever it lives, but a
+ * wildcard such as "Get-Ch*" returns nothing, apparently filtered against the
+ * empty module name. Name the module to search a wildcard within it.
  *
  * `argument_list` is the optional 2.2.3.24 ArgumentList: a list of arbitrary
  * objects the server's higher layer may use to shape the parameter metadata
@@ -49,6 +53,8 @@ const char *psrp_command_type_name(int32_t command_type);
 psrp_result_t psrp_build_get_command_metadata(const char *const *name_patterns,
                                               size_t pattern_count,
                                               int32_t command_type,
+                                              const char *const *namespaces,
+                                              size_t namespace_count,
                                               const psrp_value_t *argument_list,
                                               psrp_buffer_t *out);
 

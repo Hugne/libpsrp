@@ -36,6 +36,19 @@ example_run_command http://localhost:5985/wsman Administrator pw "Get-Date; 6*7"
 42
 ```
 
+## Against a real server
+
+Unit tests prove an encoding matches the specification. They cannot prove a
+server accepts it, or that a feature is reachable through the public API at
+all, and that second failure turned out to be the common one: four features
+passed every unit test while being impossible to use. So every feature is also
+driven against a live PowerShell:
+
+```
+PSRP_INTEROP=1 PSRP_USER=... PSRP_PASS=... test_features   # all 13 sections
+test_features hostread                                       # just one
+```
+
 ## Hardening
 
 Everything a server sends is untrusted, so every parser is fuzzed:

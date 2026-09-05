@@ -28,6 +28,7 @@
 #include "psrp/psrp_records.h"
 #include "psrp/psrp_host.h"
 #include "psrp/psrp_metadata.h"
+#include "psrp/psrp_crypto.h"
 
 static wchar_t *widen(const char *s)
 {
@@ -58,7 +59,10 @@ typedef struct {
     int public_key_requested;
     int64_t last_availability_count;
     int last_availability_known;
+    int host_answered;           /* value-returning host calls we replied to */
     char first_error[256];
+    char output_text[2048];      /* every PIPELINE_OUTPUT rendered, joined */
+    char last_ss_b64[1024];      /* last SecureString output, still encrypted */
 } seen_t;
 
 static void flush_out(psrp_session_t *s, psrp_transport_t *t)
@@ -83,7 +87,29 @@ static int drain(psrp_session_t *s, psrp_transport_t *t, seen_t *seen)
 
     while (psrp_session_next_event(s, &e) == PSRP_OK) {
         switch (e.kind) {
-        case PSRP_EVENT_PIPELINE_OUTPUT:      seen->output++; break;
+        case PSRP_EVENT_PIPELINE_OUTPUT: {
+            psrp_buffer_t text;
+            size_t used = strlen(seen->output_text);
+            seen->output++;
+            /* A SecureString is kept as it arrived, still encrypted, so the
+             * crypto section can decrypt it and check the plaintext rather
+             * than merely noting that something came back. */
+            if (e.value.kind == PSRP_VAL_SECURESTRING &&
+                e.value.as.text.len < sizeof seen->last_ss_b64) {
+                memcpy(seen->last_ss_b64, e.value.as.text.ptr,
+                       e.value.as.text.len);
+                seen->last_ss_b64[e.value.as.text.len] = '\0';
+            }
+            psrp_buffer_init(&text);
+            if (psrp_value_to_text(&e.value, &text) == PSRP_OK &&
+                used + text.len + 2 < sizeof seen->output_text) {
+                memcpy(seen->output_text + used, text.data, text.len);
+                seen->output_text[used + text.len] = '|';
+                seen->output_text[used + text.len + 1] = '\0';
+            }
+            psrp_buffer_free(&text);
+            break;
+        }
         case PSRP_EVENT_VERBOSE_RECORD:       seen->verbose++; break;
         case PSRP_EVENT_WARNING_RECORD:       seen->warning++; break;
         case PSRP_EVENT_DEBUG_RECORD:         seen->debug++; break;
@@ -107,16 +133,27 @@ static int drain(psrp_session_t *s, psrp_transport_t *t, seen_t *seen)
         case PSRP_EVENT_HOST_CALL:
             seen->host_call++;
             /* A method with a return value must be answered or the pipeline
-             * waits forever; one without must not be. */
+             * waits forever; one without must not be. The answers are chosen
+             * so a script can echo them back and prove they arrived. */
             if (psrp_host_method_returns_value(e.state)) {
-                psrp_value_t nothing;
-                psrp_value_init(&nothing);
-                psrp_value_set_null(&nothing);
-                (void)psrp_session_respond_to_host_call(
-                    s, psrp_guid_is_empty(&e.pipeline_id) ? NULL
-                                                          : &e.pipeline_id,
-                    e.call_id, e.state, &nothing, NULL);
-                psrp_value_free(&nothing);
+                psrp_value_t reply;
+                psrp_value_init(&reply);
+                /* A return value is encoded per 2.2.6, and 2.2.6.1.1 says a
+                 * plainly serializable type is not encoded at all. A bare
+                 * string is what the server casts to System.String; a
+                 * wrapped one fails that cast. */
+                if (e.state == PSRP_HOST_READ_LINE)
+                    (void)psrp_value_set_string(&reply, "typed-by-client");
+                else if (e.state == PSRP_HOST_GET_BUFFER_SIZE)
+                    (void)psrp_host_make_size(120, 3000, &reply);
+                else
+                    psrp_value_set_null(&reply);
+                if (psrp_session_respond_to_host_call(
+                        s, psrp_guid_is_empty(&e.pipeline_id) ? NULL
+                                                              : &e.pipeline_id,
+                        e.call_id, e.state, &reply, NULL) == PSRP_OK)
+                    seen->host_answered++;
+                psrp_value_free(&reply);
                 flush_out(s, t);
             }
             break;
@@ -465,6 +502,30 @@ static int section_crypto(psrp_transport_t *t)
         if (seen.output < 1) {
             printf("  FAIL: no SecureString came back\n");
             bad = 1;
+        } else {
+            /* A value arriving is not the same as the key working. Decrypt
+             * it: the server encrypted "hunter2" under the key it sent us,
+             * so reading that back is the proof both halves agree. */
+            psrp_value_t ss;
+            psrp_buffer_t plain;
+            psrp_value_init(&ss);
+            psrp_buffer_init(&plain);
+            if (psrp_value_set_text(&ss, PSRP_VAL_SECURESTRING,
+                                    seen.last_ss_b64,
+                                    strlen(seen.last_ss_b64)) != PSRP_OK ||
+                psrp_crypto_unprotect_value(psrp_session_crypto(s), &ss,
+                                            &plain) != PSRP_OK) {
+                printf("  FAIL: could not decrypt the returned SecureString\n");
+                bad = 1;
+            } else if (plain.len != 7 || memcmp(plain.data, "hunter2", 7) != 0) {
+                printf("  FAIL: decrypted to %zu bytes, not \"hunter2\"\n",
+                       plain.len);
+                bad = 1;
+            } else {
+                printf("  decrypted the server's SecureString: hunter2\n");
+            }
+            psrp_buffer_free(&plain);
+            psrp_value_free(&ss);
         }
     }
 
@@ -491,7 +552,10 @@ static int section_metadata(psrp_transport_t *t)
      * holding one empty string. Our encoding is faithful; the library simply
      * offers no way to send a different namespace yet (TODO PSRP-17). */
     const char *pat = getenv("PSRP_META_PATTERN");
+    const char *ns_env = getenv("PSRP_META_NAMESPACE");
     const char *patterns[1];
+    const char *namespaces[1];
+    size_t ns_count = 0;
     psrp_session_t *s;
     seen_t seen;
     psrp_buffer_t payload;
@@ -504,6 +568,7 @@ static int section_metadata(psrp_transport_t *t)
 
     if (!pat) pat = "Get-ChildItem";
     patterns[0] = pat;
+    if (ns_env && ns_env[0]) { namespaces[0] = ns_env; ns_count = 1; }
     first_name[0] = '\0';
     memset(&seen, 0, sizeof seen);
     s = open_pool(t, &seen);
@@ -512,6 +577,8 @@ static int section_metadata(psrp_transport_t *t)
     psrp_buffer_init(&payload);
     if (psrp_session_command_metadata_payload(s, patterns, 1,
                                               PSRP_COMMAND_TYPE_ALL,
+                                              ns_count ? namespaces : NULL,
+                                              ns_count,
                                               &pid, &payload) != PSRP_OK) {
         printf("  FAIL: command_metadata_payload refused\n");
         psrp_buffer_free(&payload);
@@ -592,6 +659,450 @@ static int section_metadata(psrp_transport_t *t)
     return bad;
 }
 
+/* ------------------------------------------- host calls with a return ---- */
+
+static int section_hostread(psrp_transport_t *t)
+{
+    /* WriteLine proved the server calls us. It does not prove we can answer:
+     * a method with a return value blocks the pipeline until the response
+     * arrives, and psrp_session_respond_to_host_call had never been run
+     * against a server. ReadLine returns a string and GetBufferSize returns a
+     * Size, so between them a primitive and a complex reply are covered. */
+    static const char kScript[] =
+        "$line = $Host.UI.ReadLine(); "
+        "$size = $Host.UI.RawUI.BufferSize; "
+        "\"line:$line\"; \"width:$($size.Width)\"";
+    psrp_session_t *s;
+    seen_t seen;
+    int state, bad = 0;
+
+    memset(&seen, 0, sizeof seen);
+    s = open_pool_ex(t, &seen, true);
+    if (!s) return 1;
+
+    state = run_script(s, t, kScript, &seen);
+    printf("  host_calls=%d answered=%d output=%d state=%d\n", seen.host_call,
+           seen.host_answered, seen.output, state);
+    printf("  output text: %s\n", seen.output_text);
+    if (seen.first_error[0]) printf("  error record: %s\n", seen.first_error);
+
+    if (state != PSRP_INVOCATION_COMPLETED) {
+        printf("  FAIL: pipeline state %d\n", state);
+        bad = 1;
+    }
+    /* ReadLine must come to us and be answered; the script echoes the reply,
+     * so that is the round trip. BufferSize does not produce a call at all:
+     * the server answers it from the _hostDefaultData sent in HostInfo, which
+     * is what "width:120" proves. Both paths are checked, and only the one
+     * that genuinely calls back is required to have been answered. */
+    if (seen.host_answered < 1) {
+        printf("  FAIL: ReadLine was never answered\n");
+        bad = 1;
+    }
+    if (!strstr(seen.output_text, "line:typed-by-client")) {
+        printf("  FAIL: ReadLine reply did not reach the script\n");
+        bad = 1;
+    }
+    if (!strstr(seen.output_text, "width:120")) {
+        printf("  FAIL: the console data sent in HostInfo did not take\n");
+        bad = 1;
+    }
+
+    (void)psrp_transport_close_shell(t);
+    psrp_session_free(s);
+    return bad;
+}
+
+/* --------------------------------------------------------- stop pipeline -- */
+
+static int section_stop(psrp_transport_t *t)
+{
+    /* 3.1.4.4. A pipeline that would run for a minute is stopped after a
+     * moment; it must report Stopped, and the marker after the sleep must
+     * never appear. */
+    static const char kScript[] = "Start-Sleep -Seconds 60; 'never'";
+    psrp_session_t *s;
+    psrp_command_t *cmd;
+    psrp_buffer_t payload;
+    psrp_guid_t pid;
+    seen_t seen;
+    int state = -1, bad = 0;
+
+    memset(&seen, 0, sizeof seen);
+    s = open_pool(t, &seen);
+    if (!s) return 1;
+
+    cmd = psrp_command_new(kScript, true);
+    psrp_buffer_init(&payload);
+    if (!cmd ||
+        psrp_session_pipeline_payload(s, &cmd, 1, PSRP_PIPELINE_NO_INPUT,
+                                      &pid, &payload) != PSRP_OK ||
+        psrp_transport_run_command(t, &pid, payload.data, payload.len)
+            != PSRP_OK) {
+        printf("  FAIL: could not start the pipeline: %s\n",
+               psrp_transport_last_error(t));
+        bad = 1;
+        goto done;
+    }
+
+    /* Let it get going, then pull the plug. */
+    (void)pump(s, t, &seen, 1500);
+    if (psrp_transport_stop_pipeline(t) != PSRP_OK) {
+        printf("  FAIL: stop: %s\n", psrp_transport_last_error(t));
+        bad = 1;
+        goto done;
+    }
+    do {
+        state = pump(s, t, &seen, 30000);
+    } while (state >= 0 && !psrp_invocation_state_is_terminal(state));
+
+    printf("  state=%d (%s) output=%d\n", state,
+           psrp_invocation_state_name(state), seen.output);
+    if (state != PSRP_INVOCATION_STOPPED) {
+        printf("  FAIL: expected Stopped\n");
+        bad = 1;
+    }
+    if (strstr(seen.output_text, "never")) {
+        printf("  FAIL: the pipeline ran to completion anyway\n");
+        bad = 1;
+    }
+
+done:
+    psrp_buffer_free(&payload);
+    psrp_command_free(cmd);
+    (void)psrp_transport_close_shell(t);
+    psrp_session_free(s);
+    return bad;
+}
+
+/* ---------------------------------------- several commands, parameters --- */
+
+static int section_multicommand(psrp_transport_t *t)
+{
+    /* Two commands in one pipeline, the first with typed parameters: an
+     * integer and a string. Everything live so far was a single script with
+     * no parameters at all, so neither the Cmds list nor CommandParameter
+     * had been seen by a server. */
+    psrp_session_t *s;
+    psrp_command_t *cmds[2] = { NULL, NULL };
+    psrp_buffer_t payload;
+    psrp_guid_t pid;
+    psrp_value_t v;
+    seen_t seen;
+    int state = -1, bad = 0;
+
+    memset(&seen, 0, sizeof seen);
+    s = open_pool(t, &seen);
+    if (!s) return 1;
+
+    psrp_value_init(&v);
+    cmds[0] = psrp_command_new("Get-Date", false);
+    cmds[1] = psrp_command_new("Out-String", false);
+    psrp_buffer_init(&payload);
+    if (!cmds[0] || !cmds[1]) { bad = 1; goto done; }
+
+    psrp_value_set_int32(&v, 2000);
+    if (psrp_command_add_parameter(cmds[0], "Year", &v) != PSRP_OK) { bad = 1; goto done; }
+    psrp_value_set_int32(&v, 1);
+    if (psrp_command_add_parameter(cmds[0], "Month", &v) != PSRP_OK) { bad = 1; goto done; }
+    psrp_value_set_int32(&v, 1);
+    if (psrp_command_add_parameter(cmds[0], "Day", &v) != PSRP_OK) { bad = 1; goto done; }
+    if (psrp_command_add_string_parameter(cmds[0], "Format", "yyyy-MM-dd")
+        != PSRP_OK) { bad = 1; goto done; }
+
+    if (psrp_session_pipeline_payload(s, cmds, 2, PSRP_PIPELINE_NO_INPUT,
+                                      &pid, &payload) != PSRP_OK ||
+        psrp_transport_run_command(t, &pid, payload.data, payload.len)
+            != PSRP_OK) {
+        printf("  FAIL: run: %s\n", psrp_transport_last_error(t));
+        bad = 1;
+        goto done;
+    }
+    do {
+        state = pump(s, t, &seen, 60000);
+    } while (state >= 0 && !psrp_invocation_state_is_terminal(state));
+
+    printf("  state=%d output=%d text=%s\n", state, seen.output,
+           seen.output_text);
+    if (seen.first_error[0]) printf("  error record: %s\n", seen.first_error);
+    if (state != PSRP_INVOCATION_COMPLETED) {
+        printf("  FAIL: pipeline state %d\n", state);
+        bad = 1;
+    }
+    /* Out-String turns the date into text, so the parameters we sent show up
+     * verbatim in what comes back. */
+    if (!strstr(seen.output_text, "2000-01-01")) {
+        printf("  FAIL: parameters did not reach Get-Date\n");
+        bad = 1;
+    }
+
+done:
+    psrp_value_free(&v);
+    psrp_buffer_free(&payload);
+    psrp_command_free(cmds[0]);
+    psrp_command_free(cmds[1]);
+    (void)psrp_transport_close_shell(t);
+    psrp_session_free(s);
+    return bad;
+}
+
+/* --------------------------------------- SecureString to the server ------ */
+
+static int section_secure_to_server(psrp_transport_t *t)
+{
+    /* The crypto section proved the server can send us a protected value.
+     * This is the other direction: encrypt under the negotiated key, send it
+     * as a parameter, and have the script reveal it, which proves the server
+     * decrypted exactly what we encrypted. */
+    static const char kScript[] =
+        "param($s) (New-Object System.Net.NetworkCredential('', $s)).Password";
+    psrp_session_t *s;
+    psrp_command_t *cmd = NULL;
+    psrp_buffer_t payload, cipher;
+    psrp_guid_t pid;
+    psrp_value_t v;
+    seen_t seen;
+    int state = -1, bad = 0, waited = 0;
+
+    memset(&seen, 0, sizeof seen);
+    s = open_pool(t, &seen);
+    if (!s) return 1;
+    psrp_value_init(&v);
+    psrp_buffer_init(&payload);
+    psrp_buffer_init(&cipher);
+
+    if (psrp_session_start_key_exchange(s) != PSRP_OK) { bad = 1; goto done; }
+    flush_out(s, t);
+    while (!psrp_session_has_session_key(s) && waited < 30000) {
+        psrp_buffer_t chunk;
+        (void)drain(s, t, &seen);
+        if (psrp_session_has_session_key(s)) break;
+        psrp_buffer_init(&chunk);
+        if (psrp_transport_receive(t, &chunk, 250) == PSRP_OK && chunk.len)
+            (void)psrp_session_receive(s, chunk.data, chunk.len);
+        psrp_buffer_free(&chunk);
+        waited += 250;
+    }
+    if (!psrp_session_has_session_key(s)) {
+        printf("  FAIL: no session key\n");
+        bad = 1;
+        goto done;
+    }
+
+    /* Raw encrypt output is bytes, and an <SS> element carries base64, so a
+     * value built from the bytes is not valid XML and never serializes. The
+     * protect helper produces the wire form, which is the only shape a caller
+     * should need. */
+    if (psrp_crypto_protect_string(psrp_session_crypto(s), "hunter2", 7, &v)
+        != PSRP_OK) {
+        printf("  FAIL: protect_string\n");
+        bad = 1;
+        goto done;
+    }
+
+    cmd = psrp_command_new(kScript, true);
+    if (!cmd) { bad = 1; goto done; }
+    {
+        psrp_result_t rc = psrp_command_add_parameter(cmd, "s", &v);
+        if (rc != PSRP_OK) {
+            printf("  FAIL: add_parameter: %s\n", psrp_strerror(rc));
+            bad = 1;
+            goto done;
+        }
+        rc = psrp_session_pipeline_payload(s, &cmd, 1, PSRP_PIPELINE_NO_INPUT,
+                                           &pid, &payload);
+        if (rc != PSRP_OK) {
+            printf("  FAIL: pipeline_payload: %s\n", psrp_strerror(rc));
+            bad = 1;
+            goto done;
+        }
+    }
+    if (psrp_transport_run_command(t, &pid, payload.data, payload.len)
+        != PSRP_OK) {
+        printf("  FAIL: run: %s\n", psrp_transport_last_error(t));
+        bad = 1;
+        goto done;
+    }
+    do {
+        state = pump(s, t, &seen, 60000);
+    } while (state >= 0 && !psrp_invocation_state_is_terminal(state));
+
+    printf("  state=%d text=%s\n", state, seen.output_text);
+    if (seen.first_error[0]) printf("  error record: %s\n", seen.first_error);
+    if (state != PSRP_INVOCATION_COMPLETED) {
+        printf("  FAIL: pipeline state %d\n", state);
+        bad = 1;
+    }
+    if (!strstr(seen.output_text, "hunter2")) {
+        printf("  FAIL: the server did not decrypt what we sent\n");
+        bad = 1;
+    }
+
+done:
+    psrp_value_free(&v);
+    psrp_buffer_free(&cipher);
+    psrp_buffer_free(&payload);
+    psrp_command_free(cmd);
+    (void)psrp_transport_close_shell(t);
+    psrp_session_free(s);
+    return bad;
+}
+
+/* ------------------------------------------------------ user events ------ */
+
+static int section_userevent(psrp_transport_t *t)
+{
+    /* 2.2.2.12. Registering with -Forward asks the server to relay events to
+     * the client, which is the only way a USER_EVENT is ever generated. */
+    /* Forwarding happens from the runspace's event pump, which only runs when
+     * the pipeline yields to it. Start-Sleep does not; Wait-Event does. */
+    static const char kScript[] =
+        "Register-EngineEvent -SourceIdentifier libpsrp.test -Forward | Out-Null; "
+        "New-Event -SourceIdentifier libpsrp.test -MessageData 'hi' | Out-Null; "
+        "Wait-Event -SourceIdentifier libpsrp.test -Timeout 3 | Out-Null; "
+        "'done'";
+    psrp_session_t *s;
+    seen_t seen;
+    int state, bad = 0;
+
+    memset(&seen, 0, sizeof seen);
+    s = open_pool(t, &seen);
+    if (!s) return 1;
+
+    state = run_script(s, t, kScript, &seen);
+    /* The event can trail the pipeline's own completion; give it a moment. */
+    (void)pump(s, t, &seen, 2000);
+    printf("  user_events=%d state=%d\n", seen.user_event, state);
+    if (seen.first_error[0]) printf("  error record: %s\n", seen.first_error);
+
+    if (state != PSRP_INVOCATION_COMPLETED) {
+        printf("  FAIL: pipeline state %d\n", state);
+        bad = 1;
+    }
+    if (seen.user_event < 1) {
+        printf("  FAIL: no USER_EVENT arrived\n");
+        bad = 1;
+    }
+
+    (void)psrp_transport_close_shell(t);
+    psrp_session_free(s);
+    return bad;
+}
+
+/* ---------------------------------- application private data, reset ----- */
+
+static int section_appdata(psrp_transport_t *t)
+{
+    /* 2.2.2.13 arrives unasked during open. Its content is opaque to PSRP; the
+     * assertion is only that the message was recognised rather than falling
+     * through as unknown. */
+    psrp_session_t *s;
+    seen_t seen;
+    int bad = 0;
+
+    memset(&seen, 0, sizeof seen);
+    s = open_pool(t, &seen);
+    if (!s) return 1;
+    (void)pump(s, t, &seen, 1000);
+
+    printf("  app_private_data=%d\n", seen.app_private_data);
+    if (seen.app_private_data < 1) {
+        printf("  FAIL: no APPLICATION_PRIVATE_DATA during open\n");
+        bad = 1;
+    }
+
+    (void)psrp_transport_close_shell(t);
+    psrp_session_free(s);
+    return bad;
+}
+
+static int section_reset(psrp_transport_t *t)
+{
+    /* 2.2.2.31 is protocol 2.3 and later. This server speaks 2.2, so the
+     * interesting question is what happens: the message must at least not
+     * break the pool. If a reply comes it must quote our identifier. */
+    psrp_session_t *s;
+    seen_t seen;
+    int64_t ci = 0;
+    int bad = 0;
+
+    memset(&seen, 0, sizeof seen);
+    s = open_pool(t, &seen);
+    if (!s) return 1;
+
+    if (psrp_session_reset_runspace_state(s, &ci) != PSRP_OK) {
+        printf("  FAIL: reset_runspace_state refused\n");
+        bad = 1;
+    } else {
+        flush_out(s, t);
+        (void)pump(s, t, &seen, 5000);
+        printf("  server protocol %s: replies=%d recognised=%d pool=%s\n",
+               psrp_session_server_capability(s)
+                   ? psrp_session_server_capability(s)->protocol_version
+                   : "?",
+               seen.availability, seen.last_availability_known,
+               psrp_runspace_pool_state_name(psrp_session_pool_state(s)));
+        if (seen.availability > 0 && !seen.last_availability_known) {
+            printf("  FAIL: reply quoted an identifier we never sent\n");
+            bad = 1;
+        }
+        if (psrp_session_pool_state(s) != PSRP_RUNSPACE_OPENED) {
+            printf("  FAIL: pool left Opened\n");
+            bad = 1;
+        }
+    }
+
+    (void)psrp_transport_close_shell(t);
+    psrp_session_free(s);
+    return bad;
+}
+
+/* ------------------------------- pool-level traffic after a pipeline ----- */
+
+static int section_poolafter(psrp_transport_t *t)
+{
+    /* Every pool-level exchange verified so far happened before any pipeline
+     * ran. This asks the same question after one: does a RunspacePool-level
+     * reply still arrive once a command has come and gone? If not, the
+     * transport is only listening at shell level until the first command,
+     * and every USER_EVENT, RUNSPACEPOOL_HOST_CALL and availability reply
+     * after that point is lost. */
+    psrp_session_t *s;
+    seen_t seen;
+    int64_t ci = 0;
+    int state, bad = 0;
+
+    memset(&seen, 0, sizeof seen);
+    s = open_pool(t, &seen);
+    if (!s) return 1;
+
+    state = run_script(s, t, "'warm'", &seen);
+    if (state != PSRP_INVOCATION_COMPLETED) {
+        printf("  FAIL: warm-up pipeline state %d\n", state);
+        bad = 1;
+        goto done;
+    }
+
+    seen.availability = 0;
+    if (psrp_session_get_available_runspaces(s, &ci) != PSRP_OK) {
+        printf("  FAIL: get_available_runspaces refused\n");
+        bad = 1;
+        goto done;
+    }
+    flush_out(s, t);
+    (void)pump(s, t, &seen, 10000);
+    printf("  after a pipeline: availability replies=%d\n", seen.availability);
+    if (seen.availability < 1) {
+        printf("  FAIL: pool-level reply lost once a pipeline has run\n");
+        bad = 1;
+    }
+
+done:
+    (void)psrp_transport_close_shell(t);
+    psrp_session_free(s);
+    return bad;
+}
+
 /* ------------------------------------------------------------------ main -- */
 
 typedef int (*section_fn)(psrp_transport_t *);
@@ -602,6 +1113,14 @@ static const struct { const char *name; section_fn fn; } kSections[] = {
     { "hostcall",  section_hostcall },
     { "crypto",    section_crypto },
     { "metadata",  section_metadata },
+    { "hostread",  section_hostread },
+    { "stop",      section_stop },
+    { "multicommand", section_multicommand },
+    { "secure_to_server", section_secure_to_server },
+    { "userevent", section_userevent },
+    { "appdata",   section_appdata },
+    { "reset",     section_reset },
+    { "poolafter", section_poolafter },
 };
 #define SECTION_COUNT (sizeof kSections / sizeof kSections[0])
 

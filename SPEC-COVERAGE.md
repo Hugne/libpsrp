@@ -37,7 +37,7 @@ The two entries left beyond those exist only to support a non-Windows port.
 | Public header self-containment | done | done | one generated TU per header, in C and C++; a build-time check, verified to fail on a broken header |
 | Fresh-clone build | done | done | clone builds and tests green on both toolchains, with live interop and stress; nothing depends on an untracked file |
 | Live pipeline input | done | done | `tests/interop/test_input.c`; the input direction had never been run against a real server |
-| Live feature coverage | done | done | `tests/interop/test_features.c`; streams, runspace controls, host calls, key exchange and command metadata, none of which had ever been run against a real server |
+| Live feature coverage | done | done | `tests/interop/test_features.c`, 13 sections: streams, runspace controls, host calls both ways, key exchange and SecureString both ways, command metadata with namespaces, stop, multi-command pipelines with typed parameters, user events, application private data, reset, and pool-level traffic after a pipeline |
 | Worked example | done | done | `examples/run_command.c`, verified against a live server |
 | Differential testing vs psrpcore | done | done | both directions, 39 cases; corpus committed so ctest stays hermetic |
 
@@ -280,11 +280,11 @@ The two entries left beyond those exist only to support a non-Windows port.
 | 3.1.5.4.9 | RUNSPACEPOOL_STATE Message | done | done | ignored once Closed or Broken |
 | 3.1.5.4.10 | CREATE_PIPELINE Message | done | done | requires Opened; pipeline enters the table as Running |
 | 3.1.5.4.11 | GET_AVAILABLE_RUNSPACES Message | done | done | requires Opened; allocates a call identifier |
-| 3.1.5.4.12 | USER_EVENT Message | done | done | surfaced as its own event |
-| 3.1.5.4.13 | APPLICATION_PRIVATE_DATA Message | done | done | surfaced with the object intact |
+| 3.1.5.4.12 | USER_EVENT Message | done | done | surfaced as its own event; live-verified via Register-EngineEvent -Forward |
+| 3.1.5.4.13 | APPLICATION_PRIVATE_DATA Message | done | done | surfaced with the object intact; live-verified |
 | 3.1.5.4.14 | GET_COMMAND_METADATA Message | done | done | live-verified; builder plus both result parsers |
 | 3.1.5.4.15 | RUNSPACEPOOL_HOST_CALL Message | done | done | live-verified; ci and method id surfaced with the parameters |
-| 3.1.5.4.16 | RUNSPACEPOOL_HOST_RESPONSE Message | done | done | quotes the call's ci; goes out on the pr stream |
+| 3.1.5.4.16 | RUNSPACEPOOL_HOST_RESPONSE Message | done | done | quotes the call's ci; goes out on the pr stream; live-verified |
 | 3.1.5.4.17 | PIPELINE_INPUT Message | done | done | refused unless the pipeline is Running; live-verified, incl. a payload spanning fragments |
 | 3.1.5.4.18 | END_OF_PIPELINE_INPUT Message | done | done | refused unless the pipeline is Running; live-verified |
 | 3.1.5.4.19 | PIPELINE_OUTPUT Message | done | done | surfaced as an event carrying the object |
@@ -296,10 +296,10 @@ The two entries left beyond those exist only to support a non-Windows port.
 | 3.1.5.4.25 | PROGRESS_RECORD Message | done | done | surfaced as an event |
 | 3.1.5.4.26 | INFORMATION_RECORD Message | done | done | surfaced as an event |
 | 3.1.5.4.27 | PIPELINE_HOST_CALL Message | done | done | live-verified; ci and method id surfaced with the parameters |
-| 3.1.5.4.28 | PIPELINE_HOST_RESPONSE Message | done | done | quotes the call's ci; goes out on the pr stream |
+| 3.1.5.4.28 | PIPELINE_HOST_RESPONSE Message | done | done | quotes the call's ci; goes out on the pr stream; live-verified with ReadLine |
 | 3.1.5.4.29 | CONNECT_RUNSPACEPOOL Message | done | done | sent once, with SESSION_CAPABILITY, from Connecting |
 | 3.1.5.4.30 | RUNSPACEPOOL_INIT_DATA Message | done | done | surfaced with the server's actual bounds |
-| 3.1.5.4.31 | RESET_RUNSPACE_STATE Message | done | done | requires Opened; allocates a call identifier |
+| 3.1.5.4.31 | RESET_RUNSPACE_STATE Message | done | done | requires Opened; allocates a call identifier; live-verified, answered even by a 2.2 server |
 | 3.1.6 | Timer Events | done | done | expiry breaks the pool and raises an event |
 | 3.1.7 | Other Local Events | done | done | an error breaks the pool, or fails just its pipeline |
 

@@ -80,6 +80,8 @@ static psrp_result_t root_object(const void *xml, size_t n, psrp_value_t *root)
 psrp_result_t psrp_build_get_command_metadata(const char *const *name_patterns,
                                               size_t pattern_count,
                                               int32_t command_type,
+                                              const char *const *namespaces,
+                                              size_t namespace_count,
                                               const psrp_value_t *argument_list,
                                               psrp_buffer_t *out)
 {
@@ -90,6 +92,7 @@ psrp_result_t psrp_build_get_command_metadata(const char *const *name_patterns,
 
     if (!out) return PSRP_ERR_INVALID_ARG;
     if (pattern_count && !name_patterns) return PSRP_ERR_INVALID_ARG;
+    if (namespace_count && !namespaces) return PSRP_ERR_INVALID_ARG;
     /* 2.2.3.24 says ArgumentList MUST be a list. Catching that here beats
      * having the server reject the whole request for it. */
     if (argument_list) {
@@ -167,9 +170,31 @@ psrp_result_t psrp_build_get_command_metadata(const char *const *name_patterns,
         }
     }
 
-    /* Null Namespace means a list with one empty string, which is what we
-     * want when no namespace filter was asked for. */
-    if (rc == PSRP_OK) {
+    /* Namespace: a list of module names, or Null when none were given. The
+     * spec defines Null as a list holding one empty string; see the header
+     * for what that does to wildcards in practice. */
+    if (rc == PSRP_OK && namespace_count) {
+        psrp_object_t *ns = psrp_object_new();
+        if (!ns) { psrp_object_free(root); return PSRP_ERR_NOMEM; }
+        psrp_object_set_ref_id(ns, 3);
+        psrp_object_set_container(ns, PSRP_CONTAINER_LIST);
+        for (i = 0; i < namespace_count && rc == PSRP_OK; i++) {
+            if (!namespaces[i]) { rc = PSRP_ERR_INVALID_ARG; break; }
+            rc = psrp_value_set_text(&v, PSRP_VAL_STRING, namespaces[i],
+                                     strlen(namespaces[i]));
+            if (rc == PSRP_OK) rc = psrp_object_add_item(ns, &v);
+            psrp_value_free(&v);
+        }
+        if (rc == PSRP_OK) {
+            rc = psrp_value_set_object(&v, ns);
+            if (rc == PSRP_OK)
+                rc = psrp_object_add_extended(root, "Namespace", &v);
+            else psrp_object_free(ns);
+            psrp_value_free(&v);
+        } else {
+            psrp_object_free(ns);
+        }
+    } else if (rc == PSRP_OK) {
         psrp_value_set_null(&v);
         rc = psrp_object_add_extended(root, "Namespace", &v);
         psrp_value_free(&v);

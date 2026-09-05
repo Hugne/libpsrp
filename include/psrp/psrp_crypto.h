@@ -20,6 +20,7 @@
 #define PSRP_CRYPTO_H
 
 #include "psrp/psrp_buffer.h"
+#include "psrp/psrp_object.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -64,12 +65,30 @@ psrp_result_t psrp_crypto_encrypt(psrp_crypto_t *c, const void *plaintext,
 psrp_result_t psrp_crypto_decrypt(psrp_crypto_t *c, const void *ciphertext,
                                   size_t len, psrp_buffer_t *out);
 
-/* Convenience wrappers that convert to and from UTF-8 for the caller. */
+/* Convenience wrappers that convert to and from UTF-8 for the caller. Both
+ * work in raw ciphertext bytes; see the value-level pair below for what goes
+ * on the wire. */
 psrp_result_t psrp_crypto_encrypt_string(psrp_crypto_t *c, const char *utf8,
                                          size_t len, psrp_buffer_t *out);
 psrp_result_t psrp_crypto_decrypt_string(psrp_crypto_t *c,
                                          const void *ciphertext, size_t len,
                                          psrp_buffer_t *out);
+
+/* The wire form. A Secure String element (2.2.5.1.24) carries the ciphertext
+ * as base64, so a value built from raw encrypt output is not valid XML and the
+ * message fails to serialize. These produce and consume the value directly,
+ * which is the only shape a caller should ever need.
+ *
+ * psrp_crypto_protect_string makes a PSRP_VAL_SECURESTRING ready to be used as
+ * a command parameter, pipeline input, or credential password.
+ * psrp_crypto_unprotect_value reads one back, for example from a
+ * PSRP_EVENT_PIPELINE_OUTPUT carrying a SecureString the server returned.
+ * Both require the session key to be in place. */
+psrp_result_t psrp_crypto_protect_string(psrp_crypto_t *c, const char *utf8,
+                                         size_t len, psrp_value_t *out);
+psrp_result_t psrp_crypto_unprotect_value(psrp_crypto_t *c,
+                                          const psrp_value_t *secure_string,
+                                          psrp_buffer_t *out_utf8);
 
 /* ------------------------------------------- key exchange messages ------ */
 

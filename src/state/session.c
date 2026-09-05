@@ -641,6 +641,7 @@ psrp_result_t psrp_session_command_metadata_payload(
     psrp_session_t *s,
     const char *const *name_patterns, size_t pattern_count,
     int32_t command_type,
+    const char *const *namespaces, size_t namespace_count,
     psrp_guid_t *pipeline_id_out,
     psrp_buffer_t *out)
 {
@@ -657,7 +658,8 @@ psrp_result_t psrp_session_command_metadata_payload(
 
     psrp_buffer_init(&body);
     rc = psrp_build_get_command_metadata(name_patterns, pattern_count,
-                                         command_type, NULL, &body);
+                                         command_type, namespaces,
+                                         namespace_count, NULL, &body);
     if (rc == PSRP_OK)
         rc = emit(s, out, PSRP_MSG_GET_COMMAND_METADATA, &pid, body.data,
                   body.len);

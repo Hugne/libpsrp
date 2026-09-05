@@ -263,6 +263,49 @@ psrp_result_t psrp_crypto_decrypt(psrp_crypto_t *c, const void *ciphertext,
     return aes_run(c, false, ciphertext, len, out);
 }
 
+psrp_result_t psrp_crypto_protect_string(psrp_crypto_t *c, const char *utf8,
+                                         size_t len, psrp_value_t *out)
+{
+    psrp_buffer_t cipher, b64;
+    psrp_result_t rc;
+
+    if (!c || !utf8 || !out) return PSRP_ERR_INVALID_ARG;
+    if (!psrp_crypto_has_session_key(c)) return PSRP_ERR_STATE;
+
+    psrp_buffer_init(&cipher);
+    psrp_buffer_init(&b64);
+    rc = psrp_crypto_encrypt_string(c, utf8, len, &cipher);
+    if (rc == PSRP_OK) rc = psrp_base64_encode_buf(&b64, cipher.data, cipher.len);
+    if (rc == PSRP_OK)
+        rc = psrp_value_set_text(out, PSRP_VAL_SECURESTRING,
+                                 (const char *)b64.data, b64.len);
+    /* The ciphertext is not secret, but the plaintext this was made from is
+     * the caller's business; nothing of it lingers here. */
+    psrp_buffer_free(&cipher);
+    psrp_buffer_free(&b64);
+    return rc;
+}
+
+psrp_result_t psrp_crypto_unprotect_value(psrp_crypto_t *c,
+                                          const psrp_value_t *secure_string,
+                                          psrp_buffer_t *out_utf8)
+{
+    psrp_buffer_t cipher;
+    psrp_result_t rc;
+
+    if (!c || !secure_string || !out_utf8) return PSRP_ERR_INVALID_ARG;
+    if (secure_string->kind != PSRP_VAL_SECURESTRING) return PSRP_ERR_MALFORMED;
+    if (!psrp_crypto_has_session_key(c)) return PSRP_ERR_STATE;
+
+    psrp_buffer_init(&cipher);
+    rc = psrp_base64_decode(secure_string->as.text.ptr,
+                            secure_string->as.text.len, &cipher);
+    if (rc == PSRP_OK)
+        rc = psrp_crypto_decrypt_string(c, cipher.data, cipher.len, out_utf8);
+    psrp_buffer_free(&cipher);
+    return rc;
+}
+
 psrp_result_t psrp_crypto_encrypt_string(psrp_crypto_t *c, const char *utf8,
                                          size_t len, psrp_buffer_t *out)
 {

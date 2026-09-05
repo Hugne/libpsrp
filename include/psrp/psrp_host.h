@@ -149,7 +149,13 @@ typedef enum psrp_console_color {
 
 const char *psrp_console_color_name(int32_t color);
 
-/* Build the T/V wrappers. Each sets *out to a complex object value. */
+/* Build the T/V wrappers. Each sets *out to a complex object value.
+ *
+ * These are the shape the _hostDefaultData dictionary (2.2.3.14) wants. They
+ * are NOT the shape of a host method's return value: 2.2.6.1.1 sends a plainly
+ * serializable type unencoded, so a ReadLine reply is a bare string set with
+ * psrp_value_set_string, and answering with the wrapped form makes the server
+ * fail its cast to System.String. Verified against a live server. */
 psrp_result_t psrp_host_make_coordinates(int32_t x, int32_t y,
                                          psrp_value_t *out);
 psrp_result_t psrp_host_make_size(int32_t width, int32_t height,

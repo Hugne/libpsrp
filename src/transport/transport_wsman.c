@@ -69,11 +69,29 @@ static void CALLBACK generic_completion(PVOID ctx, DWORD flags,
  * its size. */
 #define PSRP_RECV_DETAIL_CHARS 512
 
+/*
+ * One of these per receive channel. There are two, and that is the point:
+ *
+ *   shell_rx  targets the shell and lives as long as it does. Everything
+ *             addressed to the RunspacePool arrives here: availability
+ *             replies, USER_EVENT, RUNSPACEPOOL_HOST_CALL, key exchange.
+ *   cmd_rx    targets the current command and lives as long as it does.
+ *             Pipeline output, records and PIPELINE_HOST_CALL arrive here.
+ *
+ * A single Receive retargeted from the shell to each command in turn was the
+ * previous design, and it lost every pool-level message after the first
+ * pipeline started: once retargeted it was never returned to the shell, so
+ * a RUNSPACE_AVAILABILITY asked for after a command had run never arrived,
+ * and neither did any forwarded event. PowerShell's own client keeps a shell
+ * receive open alongside each command's, which is what this now does.
+ */
 typedef struct recv_ctx {
     CRITICAL_SECTION lock;
-    HANDLE data_ready;
+    HANDLE data_ready;      /* shared with the other channel; not owned */
+    WSMAN_OPERATION_HANDLE op;
+    WSMAN_SHELL_ASYNC async;
     psrp_buffer_t buf;      /* raw stdout bytes not yet drained */
-    bool done;              /* command reported Done */
+    bool done;              /* command reported Done (cmd_rx only) */
     bool op_ended;          /* a Receive operation finished; may need re-post */
     /* Receives we cancelled ourselves and whose completion has not arrived
      * yet. A count rather than a flag, because cancellation is asynchronous:
@@ -138,18 +156,32 @@ struct psrp_transport {
     WSMAN_SESSION_HANDLE session;
     WSMAN_SHELL_HANDLE shell;
     WSMAN_COMMAND_HANDLE command;
-    WSMAN_OPERATION_HANDLE recv_op;
 
     /* Disconnect state (3.1.4.9). The idle timeout has nowhere to ride in
      * WSMAN_SHELL_ASYNC, so it waits here for the one call that reads it. */
     bool disconnected;
     DWORD pending_idle_timeout_ms;
-    WSMAN_SHELL_ASYNC recv_async;
     WSMAN_AUTHENTICATION_CREDENTIALS auth;
-    recv_ctx_t recv;
+    HANDLE data_ready;      /* signalled by either channel */
+    recv_ctx_t shell_rx;    /* pool-level traffic */
+    recv_ctx_t cmd_rx;      /* the current pipeline's traffic */
     DWORD timeout_ms;
     char last_error[640];
 };
+
+static void rx_init(recv_ctx_t *r, HANDLE data_ready)
+{
+    memset(r, 0, sizeof *r);
+    InitializeCriticalSection(&r->lock);
+    r->data_ready = data_ready;
+    psrp_buffer_init(&r->buf);
+}
+
+static void rx_destroy(recv_ctx_t *r)
+{
+    psrp_buffer_free(&r->buf);
+    DeleteCriticalSection(&r->lock);
+}
 
 static void set_error(psrp_transport_t *t, const char *what, DWORD code,
                       const wchar_t *detail)
@@ -174,9 +206,9 @@ bool psrp_transport_command_done(const psrp_transport_t *t)
     bool done;
     psrp_transport_t *mut = (psrp_transport_t *)t;
     if (!t) return true;
-    EnterCriticalSection(&mut->recv.lock);
-    done = mut->recv.done;
-    LeaveCriticalSection(&mut->recv.lock);
+    EnterCriticalSection(&mut->cmd_rx.lock);
+    done = mut->cmd_rx.done;
+    LeaveCriticalSection(&mut->cmd_rx.lock);
     return done;
 }
 
@@ -193,9 +225,9 @@ psrp_result_t psrp_wsman_transport_create(const psrp_wsman_config_t *cfg,
     t = (psrp_transport_t *)calloc(1, sizeof *t);
     if (!t) return PSRP_ERR_NOMEM;
 
-    InitializeCriticalSection(&t->recv.lock);
-    t->recv.data_ready = CreateEventW(NULL, FALSE, FALSE, NULL);
-    psrp_buffer_init(&t->recv.buf);
+    t->data_ready = CreateEventW(NULL, FALSE, FALSE, NULL);
+    rx_init(&t->shell_rx, t->data_ready);
+    rx_init(&t->cmd_rx, t->data_ready);
     t->timeout_ms = (cfg && cfg->operation_timeout_ms)
                         ? cfg->operation_timeout_ms : PSRP_DEFAULT_TIMEOUT_MS;
 
@@ -226,34 +258,40 @@ psrp_result_t psrp_wsman_transport_create(const psrp_wsman_config_t *cfg,
 
 /* Cancels the standing Receive. The server tearing it down underneath us looks
  * exactly like a fault, so it is always cancelled deliberately first. */
-static void cancel_receive(psrp_transport_t *t)
+static void cancel_receive(recv_ctx_t *r)
 {
-    if (!t->recv_op) return;
-    EnterCriticalSection(&t->recv.lock);
+    if (!r->op) return;
+    EnterCriticalSection(&r->lock);
     /* Counted, not flagged: the completion for this operation may arrive at
      * any point afterwards, including after the replacement Receive has been
      * posted, and it must still be recognised as ours when it does. */
-    t->recv.pending_aborts++;
-    LeaveCriticalSection(&t->recv.lock);
-    WSManCloseOperation(t->recv_op, 0);
-    t->recv_op = NULL;
+    r->pending_aborts++;
+    LeaveCriticalSection(&r->lock);
+    WSManCloseOperation(r->op, 0);
+    r->op = NULL;
+}
+
+static void cancel_both(psrp_transport_t *t)
+{
+    cancel_receive(&t->cmd_rx);
+    cancel_receive(&t->shell_rx);
 }
 
 /* Clears everything the previous stream left behind. A stale `done` is the
  * dangerous one: the receive loop reads it as "nothing more is coming" and
  * never re-posts, so the next shell or command produces no output at all. */
-static void reset_receive(psrp_transport_t *t)
+static void reset_receive(recv_ctx_t *r)
 {
-    EnterCriticalSection(&t->recv.lock);
-    psrp_buffer_reset(&t->recv.buf);
-    t->recv.done = false;
-    t->recv.op_ended = false;
-    t->recv.error = 0;
+    EnterCriticalSection(&r->lock);
+    psrp_buffer_reset(&r->buf);
+    r->done = false;
+    r->op_ended = false;
+    r->error = 0;
     /* pending_aborts is deliberately left alone. It tracks completions still
      * to arrive for operations we already cancelled, and clearing it here is
      * exactly the bug this replaced: the late completion would then look like
      * a server fault. Only the callback that consumes one may decrement it. */
-    LeaveCriticalSection(&t->recv.lock);
+    LeaveCriticalSection(&r->lock);
 }
 
 /* Closes the command handle, if there is one.
@@ -281,7 +319,7 @@ static void close_command(psrp_transport_t *t)
 void psrp_transport_free(psrp_transport_t *t)
 {
     if (!t) return;
-    cancel_receive(t);
+    cancel_both(t);
     close_command(t);
     if (t->shell) {
         async_op_t op;
@@ -297,9 +335,9 @@ void psrp_transport_free(psrp_transport_t *t)
     if (t->session) { WSManCloseSession(t->session, 0); t->session = NULL; }
     if (t->api) { WSManDeinitialize(t->api, 0); t->api = NULL; }
 
-    if (t->recv.data_ready) CloseHandle(t->recv.data_ready);
-    psrp_buffer_free(&t->recv.buf);
-    DeleteCriticalSection(&t->recv.lock);
+    rx_destroy(&t->cmd_rx);
+    rx_destroy(&t->shell_rx);
+    if (t->data_ready) CloseHandle(t->data_ready);
     free(t);
 }
 
@@ -347,18 +385,19 @@ static psrp_result_t build_creation_xml(const void *payload, size_t len,
     return rc;
 }
 
-/* Posts the continuous Receive that pumps stdout into recv.buf. */
-static void post_receive(psrp_transport_t *t)
+/* Posts a continuous Receive on one channel. `command` is NULL for the
+ * shell-level channel and the command handle for the pipeline's. */
+static void post_receive(psrp_transport_t *t, recv_ctx_t *r,
+                         WSMAN_COMMAND_HANDLE command)
 {
     static PCWSTR streams[1] = { L"stdout" };
     WSMAN_STREAM_ID_SET desired;
     desired.streamIDsCount = 1;
     desired.streamIDs = streams;
 
-    t->recv_async.operationContext = &t->recv;
-    t->recv_async.completionFunction = receive_completion;
-    WSManReceiveShellOutput(t->shell, t->command, 0, &desired, &t->recv_async,
-                            &t->recv_op);
+    r->async.operationContext = r;
+    r->async.completionFunction = receive_completion;
+    WSManReceiveShellOutput(t->shell, command, 0, &desired, &r->async, &r->op);
 }
 
 psrp_result_t psrp_transport_open(psrp_transport_t *t,
@@ -430,8 +469,9 @@ psrp_result_t psrp_transport_open(psrp_transport_t *t,
          * leaves its stream state behind. Clearing it before posting is what
          * makes reuse work; without this the new shell inherits the old
          * stream's `done` and never delivers anything. */
-        reset_receive(t);
-        post_receive(t);                  /* start pumping stdout */
+        reset_receive(&t->shell_rx);
+        reset_receive(&t->cmd_rx);
+        post_receive(t, &t->shell_rx, NULL);   /* pool-level traffic */
     }
     return rc;
 }
@@ -481,11 +521,10 @@ psrp_result_t psrp_transport_run_command(psrp_transport_t *t,
         return rc;
     }
 
-    /* Retarget Receive at the command so its output is delivered. */
-    cancel_receive(t);
-    /* A previous pipeline's handle would otherwise be overwritten and never
-     * released. A transport tracks one command at a time, so the old one is
-     * finished with by the time a new one starts. */
+    /* The previous pipeline's receive and handle go first. The shell-level
+     * channel is deliberately untouched: pool-level traffic keeps flowing
+     * while the new command runs. */
+    cancel_receive(&t->cmd_rx);
     close_command(t);
 
     op_init(&op);
@@ -515,9 +554,8 @@ psrp_result_t psrp_transport_run_command(psrp_transport_t *t,
     psrp_buffer_free(&utf16);
 
     if (rc == PSRP_OK) {
-        /* The cancelled shell-level Receive may have left state behind. */
-        reset_receive(t);
-        post_receive(t);
+        reset_receive(&t->cmd_rx);
+        post_receive(t, &t->cmd_rx, t->command);
         /* Fragments beyond the first travel by Send, per 3.1.5.3.3. */
         if (len > first)
             rc = psrp_transport_send(t, (const uint8_t *)payload + first,
@@ -662,7 +700,7 @@ psrp_result_t psrp_transport_disconnect(psrp_transport_t *t,
      * The command handle is deliberately kept: a disconnected shell goes on
      * running its pipeline server-side, which is the whole point, and the
      * handle is what a reconnect resumes against. */
-    cancel_receive(t);
+    cancel_both(t);
 
     t->pending_idle_timeout_ms = idle_timeout_ms;
     rc = run_shell_op(t, "WSManDisconnectShell", start_disconnect);
@@ -681,10 +719,17 @@ psrp_result_t psrp_transport_reconnect(psrp_transport_t *t)
     rc = run_shell_op(t, "WSManReconnectShell", start_reconnect);
     if (rc == PSRP_OK) {
         t->disconnected = false;
-        /* 3.1.4.10.2 step 3: a reconnect must be followed by a Receive to
-         * start data flowing again. The receive path re-arms itself, so
-         * clearing the flag is all that is needed here. */
-        reset_receive(t);
+        /* 3.1.4.10.2 step 3: a reconnect MUST be followed by a Receive to
+         * start data flowing again. Post them explicitly. The old code only
+         * cleared flags and relied on the next run_command to post one, so
+         * pool-level traffic after a reconnect was never listened for unless
+         * a new pipeline happened to follow. */
+        reset_receive(&t->shell_rx);
+        post_receive(t, &t->shell_rx, NULL);
+        if (t->command) {
+            reset_receive(&t->cmd_rx);
+            post_receive(t, &t->cmd_rx, t->command);
+        }
     }
     return rc;
 }
@@ -760,10 +805,11 @@ psrp_result_t psrp_transport_close_shell(psrp_transport_t *t)
     if (!t) return PSRP_ERR_INVALID_ARG;
     if (!t->shell) return PSRP_ERR_STATE;
 
-    /* Order matters: cancel the standing Receive, then release the command,
-     * then close the shell. A command belongs to its shell, so closing the
-     * shell first would leave the command handle parented to nothing. */
-    cancel_receive(t);
+    /* Order matters: cancel both standing Receives, then release the
+     * command, then close the shell. A command belongs to its shell, so
+     * closing the shell first would leave the command handle parented to
+     * nothing. */
+    cancel_both(t);
     close_command(t);
 
     op_init(&op);
@@ -782,6 +828,38 @@ psrp_result_t psrp_transport_close_shell(psrp_transport_t *t)
     return rc;
 }
 
+/* Drains one channel under its lock. Reports whether data was taken, whether
+ * the operation needs re-posting, and any error. */
+static void drain_channel(recv_ctx_t *r, psrp_buffer_t *out, bool *have,
+                          bool *repost, DWORD *err, wchar_t *detail,
+                          bool *done)
+{
+    EnterCriticalSection(&r->lock);
+    if (r->buf.len) {
+        if (psrp_buffer_append(out, r->buf.data, r->buf.len) == PSRP_OK) {
+            psrp_buffer_reset(&r->buf);
+            *have = true;
+        }
+    }
+    if (r->error && !*err) {
+        *err = r->error;
+        /* Copied out under the lock rather than read afterwards. The callback
+         * fills this in with wcsncpy and terminates it on the next line, so a
+         * reader racing that pair can see an unterminated buffer and run off
+         * the end of it. */
+        memcpy(detail, r->detail, PSRP_RECV_DETAIL_CHARS * sizeof *detail);
+    }
+    if (done) *done = r->done;
+    /* A Receive operation can end before what it watches does; re-post so the
+     * rest still arrives. The command channel stops once its command is done;
+     * the shell channel stops only when the shell does. */
+    if (r->op_ended && !r->done) {
+        r->op_ended = false;
+        *repost = true;
+    }
+    LeaveCriticalSection(&r->lock);
+}
+
 psrp_result_t psrp_transport_receive(psrp_transport_t *t, psrp_buffer_t *out,
                                      uint32_t timeout_ms)
 {
@@ -792,41 +870,28 @@ psrp_result_t psrp_transport_receive(psrp_transport_t *t, psrp_buffer_t *out,
 
     for (;;) {
         bool have = false;
-        bool finished;
-        bool needs_repost = false;
-        DWORD err;
+        bool cmd_done = false;
+        bool repost_shell = false, repost_cmd = false;
+        DWORD err = 0;
         wchar_t detail[PSRP_RECV_DETAIL_CHARS];
 
-        EnterCriticalSection(&t->recv.lock);
-        if (t->recv.buf.len) {
-            if (psrp_buffer_append(out, t->recv.buf.data, t->recv.buf.len)
-                == PSRP_OK) {
-                psrp_buffer_reset(&t->recv.buf);
-                have = true;
-            }
-        }
-        finished = t->recv.done;
-        err = t->recv.error;
-        /* Copied out under the lock rather than read afterwards. The callback
-         * fills this in with wcsncpy and terminates it on the next line, so a
-         * reader racing that pair can see an unterminated buffer and run off
-         * the end of it. */
-        memcpy(detail, t->recv.detail, sizeof detail);
-        /* A Receive operation can end before the command does; re-post so the
-         * remaining output still arrives. */
-        if (t->recv.op_ended && !t->recv.done) {
-            t->recv.op_ended = false;
-            needs_repost = true;
-        }
-        LeaveCriticalSection(&t->recv.lock);
+        detail[0] = L'\0';
+        drain_channel(&t->shell_rx, out, &have, &repost_shell, &err, detail,
+                      NULL);
+        drain_channel(&t->cmd_rx, out, &have, &repost_cmd, &err, detail,
+                      &cmd_done);
 
-        if (needs_repost) {
-            /* Deliberately not cancel_receive: this operation has already
-             * reported END_OF_OPERATION, so closing it produces no further
-             * completion. Counting an abort here would leave a phantom that
-             * swallowed the next genuine one. */
-            if (t->recv_op) { WSManCloseOperation(t->recv_op, 0); t->recv_op = NULL; }
-            post_receive(t);
+        /* Deliberately not cancel_receive for either: an operation that has
+         * reported END_OF_OPERATION produces no further completion, and
+         * counting an abort would leave a phantom that swallowed the next
+         * genuine one. */
+        if (repost_shell && t->shell && !t->disconnected) {
+            if (t->shell_rx.op) { WSManCloseOperation(t->shell_rx.op, 0); t->shell_rx.op = NULL; }
+            post_receive(t, &t->shell_rx, NULL);
+        }
+        if (repost_cmd && t->command && !t->disconnected) {
+            if (t->cmd_rx.op) { WSManCloseOperation(t->cmd_rx.op, 0); t->cmd_rx.op = NULL; }
+            post_receive(t, &t->cmd_rx, t->command);
         }
 
         if (have) return PSRP_OK;
@@ -834,12 +899,15 @@ psrp_result_t psrp_transport_receive(psrp_transport_t *t, psrp_buffer_t *out,
             set_error(t, "WSManReceiveShellOutput", err, detail);
             return PSRP_ERR_TRANSPORT;
         }
-        /* Nothing buffered and nothing more coming, or the caller's patience
-         * ran out: both are "no data", not a failure. */
-        if (finished) return PSRP_ERR_TRUNCATED;
+        /* Nothing buffered and the pipeline has finished, or the caller's
+         * patience ran out: both are "no data", not a failure. The shell
+         * channel never finishes on its own, so with no command in flight
+         * this waits out the timeout, which is the right answer for a caller
+         * polling for pool-level traffic. */
+        if (cmd_done && t->command) return PSRP_ERR_TRUNCATED;
         if (waited >= timeout_ms) return PSRP_ERR_TRUNCATED;
 
-        WaitForSingleObject(t->recv.data_ready, slice);
+        WaitForSingleObject(t->data_ready, slice);
         waited += slice;
     }
 }
