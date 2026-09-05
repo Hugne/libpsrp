@@ -128,9 +128,36 @@ typedef struct psrp_shell_info {
     char *resource_uri;
 } psrp_shell_info_t;
 
-/* Lists the shells on a server. `cfg` supplies the endpoint and credentials;
- * a NULL connection means the local machine. The caller frees the result with
- * psrp_shell_info_free_all. An empty list is PSRP_OK with count 0. */
+/* A discovery session. Hold one of these when listing shells more than once.
+ *
+ * The WSMan automation layer leaks a handle for every session that performs
+ * work, and does not reclaim it when the session is released, so building and
+ * tearing one down per call leaks roughly one handle per call. Reusing a
+ * session does not leak at all: 200 enumerations through one session cost
+ * nothing measurable. That is why this exists as a handle rather than only as
+ * the one-shot call below.
+ *
+ * COM is initialised for the calling thread when the handle is opened and
+ * uninitialised when it is freed, so a handle must be opened, used and freed
+ * on the same thread. */
+typedef struct psrp_discovery psrp_discovery_t;
+
+/* Opens a discovery session. `cfg` supplies the endpoint and credentials; a
+ * NULL connection means the local machine. */
+psrp_result_t psrp_wsman_discovery_open(const psrp_wsman_config_t *cfg,
+                                        psrp_discovery_t **out);
+void psrp_wsman_discovery_free(psrp_discovery_t *d);
+
+/* Lists the shells. Safe to call repeatedly on one handle. The caller frees
+ * the result with psrp_shell_info_free_all; an empty list is PSRP_OK with
+ * count 0. */
+psrp_result_t psrp_wsman_discovery_shells(psrp_discovery_t *d,
+                                          psrp_shell_info_t **out,
+                                          size_t *count);
+
+/* One-shot convenience: opens a session, lists the shells, closes it. Fine for
+ * a single lookup. Use a psrp_discovery_t when listing more than once, for the
+ * reason described above. */
 psrp_result_t psrp_wsman_enumerate_shells(const psrp_wsman_config_t *cfg,
                                           psrp_shell_info_t **out,
                                           size_t *count);

@@ -248,46 +248,70 @@ static BSTR bstr_of(const wchar_t *s)
     return s ? SysAllocString(s) : NULL;
 }
 
-psrp_result_t psrp_wsman_enumerate_shells(const psrp_wsman_config_t *cfg,
-                                          psrp_shell_info_t **out,
-                                          size_t *count)
-{
-    HRESULT hr;
-    bool com_started = false;
-    IWSManEx *wsman = NULL;
-    IWSManConnOpt *opts = NULL;
-    void *session_disp = NULL;
-    IWSManSession *session = NULL;
-    void *result_disp = NULL;
-    IWSManEnumerator *en = NULL;
-    BSTR connection = NULL, uri = NULL;
-    VARIANT uri_var;
-    psrp_shell_info_t *list = NULL;
-    size_t used = 0, cap = 0;
-    psrp_result_t rc = PSRP_ERR_TRANSPORT;
+/*
+ * A discovery session holds the COM objects open across calls.
+ *
+ * That is not a convenience. Measured on Windows 11: creating a WSMan session,
+ * enumerating once and releasing everything leaks about one process handle per
+ * call, and CoUninitialize does not reclaim it. Reusing one session for 200
+ * enumerations leaks nothing, and the handles come back when the session is
+ * finally released. A session that is merely created and never used does not
+ * leak either, so it is specifically a used-then-discarded session that costs.
+ *
+ * The leak is in the WSMan automation layer, not here: it reproduces with a
+ * standalone program that touches none of this library's code.
+ */
+struct psrp_discovery {
+    bool com_started;
+    IWSManEx *wsman;
+    IWSManConnOpt *opts;
+    void *session_disp;
+    IWSManSession *session;
+};
 
-    if (!cfg || !out || !count) return PSRP_ERR_INVALID_ARG;
+void psrp_wsman_discovery_free(psrp_discovery_t *d)
+{
+    if (!d) return;
+    if (d->session) d->session->lpVtbl->Release(d->session);
+    if (d->session_disp)
+        ((IUnknown *)d->session_disp)->lpVtbl->Release(
+            (IUnknown *)d->session_disp);
+    if (d->opts) d->opts->lpVtbl->Release(d->opts);
+    if (d->wsman) d->wsman->lpVtbl->Release(d->wsman);
+    if (d->com_started) CoUninitialize();
+    free(d);
+}
+
+psrp_result_t psrp_wsman_discovery_open(const psrp_wsman_config_t *cfg,
+                                        psrp_discovery_t **out)
+{
+    psrp_discovery_t *d;
+    HRESULT hr;
+    BSTR connection = NULL;
+
+    if (!cfg || !out) return PSRP_ERR_INVALID_ARG;
     *out = NULL;
-    *count = 0;
-    VariantInit(&uri_var);
+
+    d = (psrp_discovery_t *)calloc(1, sizeof *d);
+    if (!d) return PSRP_ERR_NOMEM;
 
     /* Apartment-threaded, and tolerate an apartment the caller already set up:
      * RPC_E_CHANGED_MODE means COM is live in another mode, which is fine for
      * an in-proc call like this one. */
     hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
-    if (SUCCEEDED(hr)) com_started = true;
-    else if (hr != RPC_E_CHANGED_MODE) return PSRP_ERR_TRANSPORT;
+    if (SUCCEEDED(hr)) d->com_started = true;
+    else if (hr != RPC_E_CHANGED_MODE) { free(d); return PSRP_ERR_TRANSPORT; }
 
     hr = CoCreateInstance(&kCLSID_WSMan, NULL, CLSCTX_INPROC_SERVER,
-                          &kIID_IWSManEx, (void **)&wsman);
-    if (FAILED(hr)) goto done;
+                          &kIID_IWSManEx, (void **)&d->wsman);
+    if (FAILED(hr)) goto fail;
 
     if (cfg->username && cfg->password) {
         void *opts_disp = NULL;
         BSTR user = bstr_of(cfg->username);
         BSTR pass = bstr_of(cfg->password);
 
-        hr = wsman->lpVtbl->CreateConnectionOptions(wsman, &opts_disp);
+        hr = d->wsman->lpVtbl->CreateConnectionOptions(d->wsman, &opts_disp);
         if (SUCCEEDED(hr) && opts_disp) {
             /* CreateConnectionOptions hands back an IDispatch. For a
              * single-inheritance COM object that pointer happens to equal the
@@ -295,17 +319,17 @@ psrp_result_t psrp_wsman_enumerate_shells(const psrp_wsman_config_t *cfg,
              * layout, so ask properly. */
             hr = ((IUnknown *)opts_disp)->lpVtbl->QueryInterface(
                 (IUnknown *)opts_disp, &kIID_IWSManConnectionOptions,
-                (void **)&opts);
+                (void **)&d->opts);
             ((IUnknown *)opts_disp)->lpVtbl->Release((IUnknown *)opts_disp);
         }
-        if (SUCCEEDED(hr) && opts) {
-            if (user) (void)opts->lpVtbl->put_UserName(opts, user);
-            if (pass) (void)opts->lpVtbl->put_Password(opts, pass);
+        if (SUCCEEDED(hr) && d->opts) {
+            if (user) (void)d->opts->lpVtbl->put_UserName(d->opts, user);
+            if (pass) (void)d->opts->lpVtbl->put_Password(d->opts, pass);
         }
         /* put_* copies, so these are ours to release either way. */
         if (user) SysFreeString(user);
         if (pass) SysFreeString(pass);
-        if (FAILED(hr)) goto done;
+        if (FAILED(hr)) goto fail;
     }
 
     connection = bstr_of(cfg->connection);   /* NULL means the local machine */
@@ -313,23 +337,53 @@ psrp_result_t psrp_wsman_enumerate_shells(const psrp_wsman_config_t *cfg,
      * with credentials must include the following flag:
      * WSManFlagCredUsernamePassword". The flat WSMan C API infers it from the
      * authentication struct; the automation API makes you say it. */
-    hr = wsman->lpVtbl->CreateSession(wsman, connection,
-                                      opts ? WSMAN_FLAG_CRED_USERNAME_PASSWORD
-                                           : 0,
-                                      opts, &session_disp);
-    if (FAILED(hr) || !session_disp) goto done;
+    hr = d->wsman->lpVtbl->CreateSession(
+        d->wsman, connection,
+        d->opts ? WSMAN_FLAG_CRED_USERNAME_PASSWORD : 0,
+        d->opts, &d->session_disp);
+    if (connection) SysFreeString(connection);
+    if (FAILED(hr) || !d->session_disp) goto fail;
 
-    hr = ((IUnknown *)session_disp)->lpVtbl->QueryInterface(
-        (IUnknown *)session_disp, &kIID_IWSManSession, (void **)&session);
-    if (FAILED(hr)) goto done;
+    hr = ((IUnknown *)d->session_disp)->lpVtbl->QueryInterface(
+        (IUnknown *)d->session_disp, &kIID_IWSManSession, (void **)&d->session);
+    if (FAILED(hr)) goto fail;
+
+    *out = d;
+    return PSRP_OK;
+
+fail:
+    psrp_wsman_discovery_free(d);
+    return PSRP_ERR_TRANSPORT;
+}
+
+psrp_result_t psrp_wsman_discovery_shells(psrp_discovery_t *d,
+                                          psrp_shell_info_t **out,
+                                          size_t *count)
+{
+    HRESULT hr;
+    BSTR uri = NULL;
+    VARIANT uri_var;
+    void *result_disp = NULL;
+    IWSManEnumerator *en = NULL;
+    psrp_shell_info_t *list = NULL;
+    size_t used = 0, cap = 0;
+    psrp_result_t rc = PSRP_ERR_TRANSPORT;
+
+    if (!d || !out || !count) return PSRP_ERR_INVALID_ARG;
+    *out = NULL;
+    *count = 0;
+    VariantInit(&uri_var);
 
     uri = bstr_of(SHELL_URI);
-    if (!uri) { rc = PSRP_ERR_NOMEM; goto done; }
+    if (!uri) return PSRP_ERR_NOMEM;
+    /* The VARIANT only borrows the BSTR: it is an [in] parameter, so the
+     * callee does not take ownership and this must not be VariantClear'd or
+     * the string would be freed twice. */
     uri_var.vt = VT_BSTR;
     uri_var.bstrVal = uri;
 
-    hr = session->lpVtbl->Enumerate(session, uri_var, NULL, NULL, 0,
-                                    &result_disp);
+    hr = d->session->lpVtbl->Enumerate(d->session, uri_var, NULL, NULL, 0,
+                                       &result_disp);
     if (FAILED(hr) || !result_disp) goto done;
 
     hr = ((IUnknown *)result_disp)->lpVtbl->QueryInterface(
@@ -385,15 +439,23 @@ psrp_result_t psrp_wsman_enumerate_shells(const psrp_wsman_config_t *cfg,
 done:
     psrp_shell_info_free_all(list, used);
     if (en) en->lpVtbl->Release(en);
-    if (result_disp) ((IUnknown *)result_disp)->lpVtbl->Release(
-        (IUnknown *)result_disp);
-    if (session) session->lpVtbl->Release(session);
-    if (session_disp) ((IUnknown *)session_disp)->lpVtbl->Release(
-        (IUnknown *)session_disp);
-    if (opts) opts->lpVtbl->Release(opts);
-    if (wsman) wsman->lpVtbl->Release(wsman);
-    if (uri) SysFreeString(uri);
-    if (connection) SysFreeString(connection);
-    if (com_started) CoUninitialize();
+    if (result_disp)
+        ((IUnknown *)result_disp)->lpVtbl->Release((IUnknown *)result_disp);
+    SysFreeString(uri);
+    return rc;
+}
+
+psrp_result_t psrp_wsman_enumerate_shells(const psrp_wsman_config_t *cfg,
+                                          psrp_shell_info_t **out,
+                                          size_t *count)
+{
+    psrp_discovery_t *d = NULL;
+    psrp_result_t rc;
+
+    if (!cfg || !out || !count) return PSRP_ERR_INVALID_ARG;
+    rc = psrp_wsman_discovery_open(cfg, &d);
+    if (rc != PSRP_OK) return rc;
+    rc = psrp_wsman_discovery_shells(d, out, count);
+    psrp_wsman_discovery_free(d);
     return rc;
 }

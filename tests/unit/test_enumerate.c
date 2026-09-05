@@ -141,6 +141,56 @@ PSRP_TEST(enumerate_rejects_bad_arguments)
                PSRP_ERR_INVALID_ARG);
 }
 
+PSRP_TEST(discovery_rejects_bad_arguments)
+{
+    psrp_wsman_config_t cfg;
+    psrp_discovery_t *d = NULL;
+    psrp_shell_info_t *list = NULL;
+    size_t count = 99;
+
+    memset(&cfg, 0, sizeof cfg);
+    ASSERT_ERR(psrp_wsman_discovery_open(NULL, &d), PSRP_ERR_INVALID_ARG);
+    ASSERT_ERR(psrp_wsman_discovery_open(&cfg, NULL), PSRP_ERR_INVALID_ARG);
+    ASSERT_ERR(psrp_wsman_discovery_shells(NULL, &list, &count),
+               PSRP_ERR_INVALID_ARG);
+    /* Freeing nothing is allowed, so a caller can clean up unconditionally. */
+    psrp_wsman_discovery_free(NULL);
+}
+
+PSRP_TEST(a_discovery_handle_can_list_repeatedly)
+{
+    /* The reason this API exists: the WSMan automation layer leaks a process
+     * handle for every session that does work and then goes away, so listing
+     * in a loop through one-shot calls leaks. Reusing a handle does not.
+     * Measured: 100 one-shot calls cost ~112 handles, 100 through one handle
+     * cost 1.
+     *
+     * Enumeration needs a live WinRM service, so this only asserts the shape
+     * when the machine has one; on a machine without, opening fails and there
+     * is nothing to check. */
+    psrp_wsman_config_t cfg;
+    psrp_discovery_t *d = NULL;
+    int i;
+
+    memset(&cfg, 0, sizeof cfg);
+    cfg.operation_timeout_ms = 30000;
+
+    if (psrp_wsman_discovery_open(&cfg, &d) != PSRP_OK) return;
+    ASSERT_NOT_NULL(d);
+
+    for (i = 0; i < 3; i++) {
+        psrp_shell_info_t *list = NULL;
+        size_t count = 12345;
+        ASSERT_OK(psrp_wsman_discovery_shells(d, &list, &count));
+        /* Count is always set, even when the server reports nothing. */
+        ASSERT_TRUE(count != 12345);
+        if (count == 0) ASSERT_NULL(list);
+        psrp_shell_info_free_all(list, count);
+    }
+
+    psrp_wsman_discovery_free(d);
+}
+
 static const psrp_test_case_t cases[] = {
     PSRP_TEST_CASE(parses_a_shell_element),
     PSRP_TEST_CASE(the_namespace_prefix_does_not_matter),
@@ -150,6 +200,8 @@ static const psrp_test_case_t cases[] = {
     PSRP_TEST_CASE(rejects_bad_arguments_and_junk),
     PSRP_TEST_CASE(freeing_is_idempotent),
     PSRP_TEST_CASE(enumerate_rejects_bad_arguments),
+    PSRP_TEST_CASE(discovery_rejects_bad_arguments),
+    PSRP_TEST_CASE(a_discovery_handle_can_list_repeatedly),
 };
 
 PSRP_TEST_MAIN(cases)

@@ -231,7 +231,7 @@ The two entries left beyond those exist only to support a non-Windows port.
 | 3.1.4.8 | Initiating a Session Key Exchange | done | done | public key export + encrypted session key import |
 | 3.1.4.9 | Disconnecting from a RunspacePool | done | done | pool and pipelines to Disconnected; live-verified |
 | 3.1.4.10 | Connecting to a RunspacePool | done | done | both the previous-session and new-session paths |
-| 3.1.4.10.1 | Discovering Disconnected RunspacePools and Associated Pipelines on a Server | done | done | wxf:Enumerate over the shell URI, via the WSMan automation interface |
+| 3.1.4.10.1 | Discovering Disconnected RunspacePools and Associated Pipelines on a Server | done | done | wxf:Enumerate over the shell URI, via the WSMan automation interface; reusable handle avoids a platform handle leak (TODO PSRP-14) |
 | 3.1.4.10.2 | Connecting to a RunspacePool from a Previous Client Session | done | done | reconnect; live-verified |
 | 3.1.4.10.3 | Connecting to a RunspacePool from a New Client Session | done | done | connect payload and wxf:Connect; discovery is TODO PSRP-12 |
 | 3.1.5 | Message Processing Events and Sequencing Rules | done | done | send/receive rules, WSMan binding, and sequencing verified live |

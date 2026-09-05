@@ -15,6 +15,11 @@ against real PowerShell, or would lose information a caller needs. Each entry
 says what the spec asks, what is done instead, and why. They stay open because
 a divergence should keep being visible, not because anything is unfinished.
 
+**A platform defect worked around** (PSRP-14). The WSMan automation layer
+leaks a process handle for every session that does work and is then discarded.
+It is not ours and cannot be fixed from here, so the API is shaped to avoid
+triggering it, and the entry records the measurements.
+
 **Out of scope for a Windows client** (PSRP-03, PSRP-05). Both exist only to
 support a non-Windows port, which would mean replacing the transport and the
 XML backend together. Neither affects correctness against a Windows server.
@@ -50,6 +55,7 @@ They are recorded so the choice stays visible rather than silently made.
 | PSRP-11 | Negotiation | 3.1.5.4.1.2 | Version table is not enforced literally | The spec's table requires protocolversion 2.1 or 2.2, PSVersion 2.0 and SerializationVersion 1.1.0.1. Two of those describe no server anyone runs: Windows PowerShell 5.1 announces PSVersion 5.1 and PowerShell 7 announces protocolversion 2.3. Enforcing the table literally would mark every modern server Broken. The check accepts protocolversion major 2 with minor 1 or above, still requires SerializationVersion 1.1.0.1 when present, and ignores PSVersion entirely. Recorded as a deliberate divergence rather than a gap. | open |
 | PSRP-12 | Discovery | 3.1.4.10.1 | Enumerating disconnected shells and commands on a server | Closed: implemented via IWSManSession::Enumerate. The earlier note here was wrong. The flat WSMan C API has no enumerate entry point, but the WSMan *automation* interface does, and it is the same one `winrm enumerate` uses. Live-verified: the enumeration lists our own open pool with a matching ShellId. Supplying credentials needs WSManFlagCredUsernamePassword, which the C API infers from the authentication struct and the automation API makes you state. | closed |
 | PSRP-13 | Error handling | 3.1.7 | An error marks the pool Broken rather than Closed | 3.1.7 says an error while processing a RunspacePool message closes that pool. This uses Broken. Closed everywhere else in the spec means an orderly shutdown, so reporting a failed pool as Closed would leave a caller who looks at the state unable to tell a decode error from a clean exit. Both states stop further processing identically under 3.1.5.1 rule 5, so nothing else changes. Recorded as a deliberate divergence. | open |
+| PSRP-14 | Discovery | 3.1.4.10.1 | WSMan automation leaks a handle per discarded session | Not our leak and not fixable from here: creating a WSMan automation session, enumerating once and releasing everything costs about one process handle per call, and CoUninitialize does not reclaim it. It reproduces in a standalone program touching none of this library's code. A session that is created but never used does not leak, and one reused for 200 enumerations leaks nothing, so the mitigation is psrp_discovery_t: hold the session and list through it. Measured 100 one-shot calls at +112 handles against 100 shared-handle calls at +1. The one-shot psrp_wsman_enumerate_shells still pays it once per call and says so. | open |
 | PSRP-06 | Server role | 3.2 | Server-side protocol details | **Out of scope** by sign-off: client only. Recorded here so the exclusion is explicit rather than an oversight. | wontfix |
 
 ## Closed
