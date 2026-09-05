@@ -214,3 +214,17 @@ conversation against a scripted in-memory server.
 
 Serialization behaviour is pinned against real PowerShell output rather than
 the spec's prose, which is looser than the implementation in several places.
+
+## License
+
+Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+Apache-2.0 rather than MIT for one reason worth stating: it grants patent
+rights explicitly. This is an implementation of a protocol Microsoft holds
+patents on, published under the Open Specification Promise, and a licence that
+is silent on patents leaves that question resting on an implication. Apache-2.0
+answers it for contributions made here.
+
+The protocol itself is Microsoft's. [MS-PSRP] is cited throughout by section
+number, which its own IP notice permits; the specification document is not
+redistributed here.

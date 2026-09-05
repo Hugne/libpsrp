@@ -1,0 +1,9 @@
+libpsrp
+Copyright 2026 Erik Hugne
+
+Licensed under the Apache License, Version 2.0. See the LICENSE file.
+
+This product is an independent implementation of the PowerShell Remoting
+Protocol as described in Microsoft's [MS-PSRP] Open Specification. Microsoft,
+Windows and PowerShell are trademarks of Microsoft Corporation. This project
+is not affiliated with, sponsored by, or endorsed by Microsoft.
