@@ -117,6 +117,40 @@ psrp_result_t psrp_client_run(psrp_client_t *c, const char *script,
 psrp_result_t psrp_client_run_command(psrp_client_t *c, psrp_command_t *cmd,
                                       psrp_run_result_t *out);
 
+/** Runs `script` with `count` objects fed to it as pipeline input, which the
+ * command reads through `$input` or a `process` block.
+ *
+ * The values are copied onto the wire before the wait begins and the input is
+ * then closed, so this suits a command that consumes a known batch. It does
+ * not suit one that must be fed while it runs in response to what it emits;
+ * that needs the low-level API, where input and output are not sequenced by a
+ * single blocking call.
+ *
+ * No handshake is needed before sending. The server queues pipeline input
+ * against the pipeline and hands it over when the command asks for it, so
+ * unlike a pipe there is no reader to wait for. */
+psrp_result_t psrp_client_run_input(psrp_client_t *c, const char *script,
+                                    const psrp_value_t *values, size_t count,
+                                    psrp_run_result_t *out);
+
+/** As psrp_client_run_input, for a command built with psrp_command_new. */
+psrp_result_t psrp_client_run_command_input(psrp_client_t *c,
+                                            psrp_command_t *cmd,
+                                            const psrp_value_t *values,
+                                            size_t count,
+                                            psrp_run_result_t *out);
+
+/** Runs `script` with `len` bytes as its whole pipeline input: the common
+ * case of psrp_client_run_input with a single byte array.
+ *
+ * The bytes travel as a CLIXML `<BA>` (2.2.5.1.17), fragmented as needed, so
+ * arbitrary binary survives intact -- but note that PowerShell may unroll an
+ * array as it passes through the pipeline, so a command should be prepared
+ * for the bytes to arrive either as one `byte[]` or as individual bytes. */
+psrp_result_t psrp_client_run_bytes(psrp_client_t *c, const char *script,
+                                    const void *data, size_t len,
+                                    psrp_run_result_t *out);
+
 /** Releases what psrp_client_run filled in and zeroes it. Safe on NULL and
  * safe to call twice. */
 void psrp_run_result_free(psrp_run_result_t *r);

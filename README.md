@@ -97,10 +97,21 @@ psrp_run_result_free(&r);
 psrp_client_free(c);
 ```
 
+Commands that consume input take it as objects, or as raw bytes for the
+common case:
+
+```c
+psrp_client_run_bytes(c, script, blob, len, &r);   /* one CLIXML <BA>  */
+psrp_client_run_input(c, script, values, n, &r);   /* n objects        */
+```
+
+so a sequence of ordinary commands, one that eats a binary blob, and more
+ordinary commands all run against the same live runspace.
+
 One client keeps one RunspacePool open, so further commands cost a pipeline
 rather than a whole remote shell. That is the substantive reason to prefer it,
 ahead of the line count. It deliberately does not cover host callbacks,
-disconnect and reconnect, pipeline input, secure strings or command metadata;
+disconnect and reconnect, secure strings or command metadata;
 `psrp_client_session` and `psrp_client_transport` hand back the objects
 underneath so those stay reachable without rewriting anything.
 

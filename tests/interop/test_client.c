@@ -191,6 +191,98 @@ int main(void)
     }
     psrp_command_free(cmd);
 
+    /* ---- binary input in the middle of a sequence ---------------------- */
+    /*
+     * The shape that matters: ordinary commands, then one that consumes
+     * binary input, then more ordinary commands -- all on one connection,
+     * with the runspace intact throughout. A command that reads input is
+     * where a client is most likely to desynchronise the stream and leave
+     * everything after it broken, so the commands after `c` are the real
+     * assertion here.
+     */
+    printf("binary input mid-sequence\n");
+    {
+        unsigned char blob[4096];
+        char pid_before[64] = {0}, pid_after[64] = {0};
+        size_t k;
+        int ok_abc;
+
+        for (k = 0; k < sizeof blob; k++)
+            blob[k] = (unsigned char)((k * 13 + 7) & 0xFF);
+
+        /* a, b */
+        rc = psrp_client_run(c, "$PID", &r);
+        text = result_text(&r);
+        if (text) { strncpy(pid_before, text, sizeof pid_before - 1);
+                    free(text); text = NULL; }
+        psrp_run_result_free(&r);
+        rc = psrp_client_run(c, "'b'", &r);
+        check(rc == PSRP_OK && r.output_count == 1, "commands before the input one");
+        psrp_run_result_free(&r);
+
+        /* c: consumes the bytes and reports what it received */
+        rc = psrp_client_run_bytes(c,
+            "$acc = New-Object System.Collections.Generic.List[byte]\n"
+            "foreach ($x in $input) {\n"
+            "  if ($x -is [byte[]]) { $acc.AddRange($x) } else "
+            "{ $acc.Add([byte]$x) }\n"
+            "}\n"
+            "$b = $acc.ToArray()\n"
+            "'GOT:' + $b.Length + ':' + $b[0] + ':' + $b[$b.Length-1]\n",
+            blob, sizeof blob, &r);
+        text = result_text(&r);
+        ok_abc = rc == PSRP_OK && r.state == PSRP_INVOCATION_COMPLETED &&
+                 text != NULL && strstr(text, "GOT:4096:7:") != NULL;
+        check(ok_abc, "the input command received all 4096 bytes intact");
+        free(text); text = NULL;
+        psrp_run_result_free(&r);
+
+        /* d, e, f */
+        rc = psrp_client_run(c, "'d'", &r);
+        check(rc == PSRP_OK && r.output_count == 1,
+              "the session still works after an input command");
+        psrp_run_result_free(&r);
+
+        rc = psrp_client_run(c, "2 + 2", &r);
+        text = result_text(&r);
+        check(rc == PSRP_OK && text && strstr(text, "4") != NULL,
+              "and keeps evaluating correctly");
+        free(text); text = NULL;
+        psrp_run_result_free(&r);
+
+        rc = psrp_client_run(c, "$PID", &r);
+        text = result_text(&r);
+        if (text) { strncpy(pid_after, text, sizeof pid_after - 1);
+                    free(text); text = NULL; }
+        psrp_run_result_free(&r);
+        check(pid_before[0] && strcmp(pid_before, pid_after) == 0,
+              "in the same runspace it started in");
+    }
+
+    /* Several objects rather than one blob, since input is objects and only
+     * incidentally bytes. */
+    printf("object input\n");
+    {
+        psrp_value_t vals[3];
+        int k;
+
+        for (k = 0; k < 3; k++) {
+            psrp_value_init(&vals[k]);
+            psrp_value_set_string(&vals[k], k == 0 ? "alpha" :
+                                            k == 1 ? "beta" : "gamma");
+        }
+        rc = psrp_client_run_input(c, "$input | ForEach-Object { $_.ToUpper() }",
+                                   vals, 3, &r);
+        check(rc == PSRP_OK && r.output_count == 3,
+              "three input objects produced three outputs");
+        text = result_text(&r);
+        check(text && strstr(text, "ALPHA") && strstr(text, "GAMMA"),
+              "and each was processed");
+        free(text); text = NULL;
+        psrp_run_result_free(&r);
+        for (k = 0; k < 3; k++) psrp_value_free(&vals[k]);
+    }
+
     /* ---- the escape hatch is real ------------------------------------- */
     printf("escape hatch\n");
     check(psrp_client_session(c) != NULL, "session is reachable");
