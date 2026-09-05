@@ -291,6 +291,50 @@ int main(void)
     }
     printf("shell closed\n");
 
+    /* 9. Reopen on the same transport. Transport reuse is the documented way to
+     *    avoid the WSMan per-session handle leak (TODO PSRP-14), and it also
+     *    exercises the teardown ordering: the command has to be released
+     *    before its shell, which used not to happen and made repeated cycles
+     *    fail after about forty. */
+    {
+        int reuse;
+        for (reuse = 0; reuse < 3; reuse++) {
+            psrp_session_t *s2 = psrp_session_new();
+            psrp_buffer_t p2;
+            int st2;
+
+            if (!s2) { printf("FAIL: session_new on reuse\n"); goto done; }
+            psrp_buffer_init(&p2);
+            if (psrp_session_open_payload(s2, &p2) != PSRP_OK ||
+                psrp_transport_open(t, psrp_session_pool_id(s2), p2.data,
+                                    p2.len) != PSRP_OK) {
+                printf("FAIL: reopen %d: %s\n", reuse,
+                       psrp_transport_last_error(t));
+                psrp_buffer_free(&p2);
+                psrp_session_free(s2);
+                goto done;
+            }
+            psrp_buffer_free(&p2);
+
+            st2 = pump_until(s2, t, PSRP_EVENT_POOL_STATE, 30000, NULL);
+            while (st2 != PSRP_RUNSPACE_OPENED && st2 >= 0)
+                st2 = pump_until(s2, t, PSRP_EVENT_POOL_STATE, 30000, NULL);
+            if (st2 != PSRP_RUNSPACE_OPENED) {
+                printf("FAIL: reused pool %d never opened\n", reuse);
+                psrp_session_free(s2);
+                goto done;
+            }
+            if (psrp_transport_close_shell(t) != PSRP_OK) {
+                printf("FAIL: close on reuse %d: %s\n", reuse,
+                       psrp_transport_last_error(t));
+                psrp_session_free(s2);
+                goto done;
+            }
+            psrp_session_free(s2);
+        }
+        printf("reopened the transport 3 more times\n");
+    }
+
     if (state == PSRP_INVOCATION_COMPLETED && out_text.len > 1) {
         printf("PASS\n");
         status = 0;

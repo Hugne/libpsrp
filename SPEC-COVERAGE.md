@@ -31,6 +31,7 @@ The two entries left beyond those exist only to support a non-Windows port.
 | Build: CMake+Ninja, MSVC & clang, CTest | done | done | both green, warnings-as-errors |
 | Fuzzing + AddressSanitizer | done | done | every parser; ASan build runs the fuzz label and the live test |
 | Leak checking | done | done | MSVC debug CRT; ASan on Windows has no leak detector |
+| Handle-leak auditing | done | done | process handle counts across repeated lifecycles; found two transport bugs and one platform defect (TODO PSRP-14) |
 | Worked example | done | done | `examples/run_command.c`, verified against a live server |
 | Differential testing vs psrpcore | done | done | both directions, 39 cases; corpus committed so ctest stays hermetic |
 

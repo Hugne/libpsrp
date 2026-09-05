@@ -44,6 +44,14 @@ void psrp_transport_free(psrp_transport_t *t);
 /* Creates the remote shell, carrying psrp_session_open_payload's output in
  * <creationXml>. `shell_id` becomes the WSMan ShellId; pass the RunspacePool
  * GUID so the WSMan and PSRP id spaces line up, as PowerShell does. */
+/* Opens a shell, carrying `payload` as the creationXml.
+ *
+ * A transport may be reused: after psrp_transport_close_shell, another shell
+ * can be opened on the same transport. Prefer that to creating a transport per
+ * shell, because the WSMan layer leaks a process handle for every session that
+ * does work and is then discarded (TODO PSRP-14). Measured: a new transport
+ * per shell costs about one handle each and keeps climbing, while 80 shells
+ * opened and closed on one transport cost nothing after the first few. */
 psrp_result_t psrp_transport_open(psrp_transport_t *t,
                                   const psrp_guid_t *shell_id,
                                   const void *payload, size_t len);

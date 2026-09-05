@@ -213,21 +213,59 @@ psrp_result_t psrp_wsman_transport_create(const psrp_wsman_config_t *cfg,
     return PSRP_OK;
 }
 
+/* Cancels the standing Receive. The server tearing it down underneath us looks
+ * exactly like a fault, so it is always cancelled deliberately first. */
+static void cancel_receive(psrp_transport_t *t)
+{
+    if (!t->recv_op) return;
+    EnterCriticalSection(&t->recv.lock);
+    t->recv.expect_abort = true;
+    LeaveCriticalSection(&t->recv.lock);
+    WSManCloseOperation(t->recv_op, 0);
+    t->recv_op = NULL;
+}
+
+/* Clears everything the previous stream left behind. A stale `done` is the
+ * dangerous one: the receive loop reads it as "nothing more is coming" and
+ * never re-posts, so the next shell or command produces no output at all. */
+static void reset_receive(psrp_transport_t *t)
+{
+    EnterCriticalSection(&t->recv.lock);
+    psrp_buffer_reset(&t->recv.buf);
+    t->recv.done = false;
+    t->recv.op_ended = false;
+    t->recv.expect_abort = false;
+    t->recv.error = 0;
+    LeaveCriticalSection(&t->recv.lock);
+}
+
+/* Closes the command handle, if there is one.
+ *
+ * A command belongs to a shell, so this has to happen before the shell goes
+ * away. Closing the shell first and the command afterwards leaves the second
+ * call operating on a handle whose parent no longer exists, which is what this
+ * code used to do: only psrp_transport_free closed the command, and
+ * psrp_transport_close_shell ran before it. */
+static void close_command(psrp_transport_t *t)
+{
+    async_op_t op;
+    WSMAN_SHELL_ASYNC a;
+
+    if (!t->command) return;
+    op_init(&op);
+    a.operationContext = &op;
+    a.completionFunction = generic_completion;
+    WSManCloseCommand(t->command, 0, &a);
+    WaitForSingleObject(op.done, 5000);
+    op_destroy(&op);
+    t->command = NULL;
+}
+
 void psrp_transport_free(psrp_transport_t *t)
 {
     if (!t) return;
-    if (t->recv_op) { WSManCloseOperation(t->recv_op, 0); t->recv_op = NULL; }
-    if (t->command) {
-        async_op_t op;
-        WSMAN_SHELL_ASYNC a;
-        op_init(&op);
-        a.operationContext = &op;
-        a.completionFunction = generic_completion;
-        WSManCloseCommand(t->command, 0, &a);
-        WaitForSingleObject(op.done, 5000);
-        op_destroy(&op);
-        t->command = NULL;
-    }
+    cancel_receive(t);
+    close_command(t);
     if (t->shell) {
         async_op_t op;
         WSMAN_SHELL_ASYNC a;
@@ -370,7 +408,14 @@ psrp_result_t psrp_transport_open(psrp_transport_t *t,
     op_destroy(&op);
     free(creation);
 
-    if (rc == PSRP_OK) post_receive(t);   /* start pumping stdout */
+    if (rc == PSRP_OK) {
+        /* A transport can be reused for another shell, and the previous one
+         * leaves its stream state behind. Clearing it before posting is what
+         * makes reuse work; without this the new shell inherits the old
+         * stream's `done` and never delivers anything. */
+        reset_receive(t);
+        post_receive(t);                  /* start pumping stdout */
+    }
     return rc;
 }
 
@@ -420,13 +465,11 @@ psrp_result_t psrp_transport_run_command(psrp_transport_t *t,
     }
 
     /* Retarget Receive at the command so its output is delivered. */
-    if (t->recv_op) {
-        EnterCriticalSection(&t->recv.lock);
-        t->recv.expect_abort = true;
-        LeaveCriticalSection(&t->recv.lock);
-        WSManCloseOperation(t->recv_op, 0);
-        t->recv_op = NULL;
-    }
+    cancel_receive(t);
+    /* A previous pipeline's handle would otherwise be overwritten and never
+     * released. A transport tracks one command at a time, so the old one is
+     * finished with by the time a new one starts. */
+    close_command(t);
 
     op_init(&op);
     args[0] = (PCWSTR)utf16.data;
@@ -456,12 +499,7 @@ psrp_result_t psrp_transport_run_command(psrp_transport_t *t,
 
     if (rc == PSRP_OK) {
         /* The cancelled shell-level Receive may have left state behind. */
-        EnterCriticalSection(&t->recv.lock);
-        t->recv.done = false;
-        t->recv.op_ended = false;
-        t->recv.expect_abort = false;
-        t->recv.error = 0;
-        LeaveCriticalSection(&t->recv.lock);
+        reset_receive(t);
         post_receive(t);
         /* Fragments beyond the first travel by Send, per 3.1.5.3.3. */
         if (len > first)
@@ -601,16 +639,13 @@ psrp_result_t psrp_transport_disconnect(psrp_transport_t *t,
     if (t->disconnected) return PSRP_ERR_STATE;
 
     /* 3.1.4.9 step 1 waits for sends to finish. Sends here are synchronous, so
-     * by the time control returns there is nothing outstanding. The receive
-     * is different: it is a standing operation and the server tearing it down
-     * would look like a fault, so cancel it deliberately first. */
-    if (t->recv_op) {
-        EnterCriticalSection(&t->recv.lock);
-        t->recv.expect_abort = true;
-        LeaveCriticalSection(&t->recv.lock);
-        WSManCloseOperation(t->recv_op, 0);
-        t->recv_op = NULL;
-    }
+     * by the time control returns there is nothing outstanding. The receive is
+     * different: it is a standing operation, so cancel it deliberately.
+     *
+     * The command handle is deliberately kept: a disconnected shell goes on
+     * running its pipeline server-side, which is the whole point, and the
+     * handle is what a reconnect resumes against. */
+    cancel_receive(t);
 
     t->pending_idle_timeout_ms = idle_timeout_ms;
     rc = run_shell_op(t, "WSManDisconnectShell", start_disconnect);
@@ -710,15 +745,11 @@ psrp_result_t psrp_transport_close_shell(psrp_transport_t *t)
     if (!t) return PSRP_ERR_INVALID_ARG;
     if (!t->shell) return PSRP_ERR_STATE;
 
-    /* Cancel the receive first; otherwise it reports the shell closing under
-     * it as a transport error. */
-    if (t->recv_op) {
-        EnterCriticalSection(&t->recv.lock);
-        t->recv.expect_abort = true;
-        LeaveCriticalSection(&t->recv.lock);
-        WSManCloseOperation(t->recv_op, 0);
-        t->recv_op = NULL;
-    }
+    /* Order matters: cancel the standing Receive, then release the command,
+     * then close the shell. A command belongs to its shell, so closing the
+     * shell first would leave the command handle parented to nothing. */
+    cancel_receive(t);
+    close_command(t);
 
     op_init(&op);
     async.operationContext = &op;
