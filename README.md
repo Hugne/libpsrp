@@ -204,6 +204,21 @@ To run the live test:
 `PSRP_CONNECTION` overrides the endpoint, which defaults to
 `http://localhost:5985/wsman`.
 
+## Continuous integration
+
+`.github/workflows/ci.yml` builds and tests on every push and pull request:
+
+- **MSVC** and **clang (llvm-mingw)**, the same two toolchains the local
+  scripts drive, so a push cannot land warnings that only one compiler sees.
+- **interop against a live server.** The runner enables PowerShell remoting on
+  itself and the suite connects to `localhost:5985` as the current user over
+  Negotiate, so no credential is stored anywhere. This is the job worth having:
+  unit tests prove an encoding, and only a real server proves a feature is
+  reachable. It is marked `continue-on-error` until it has actually been seen
+  to pass on a hosted runner -- see TODO PSRP-31.
+
+`.github/workflows/docs.yml` publishes the API reference to GitHub Pages.
+
 ## Design
 
 The protocol core performs no I/O. It is a state machine: the caller pumps

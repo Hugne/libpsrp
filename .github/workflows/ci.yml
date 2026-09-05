@@ -1,0 +1,90 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  LLVM_MINGW_VERSION: "20260826"
+
+jobs:
+  msvc:
+    name: MSVC
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      # build.bat locates Visual Studio with vswhere when its local path is
+      # absent, so it needs no CI-specific arguments.
+      - name: Build and test
+        shell: cmd
+        run: scripts\build.bat
+
+  clang:
+    name: clang (llvm-mingw)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache llvm-mingw
+        id: cache-llvm
+        uses: actions/cache@v4
+        with:
+          path: C:\llvm-mingw
+          key: llvm-mingw-${{ env.LLVM_MINGW_VERSION }}-ucrt-x86_64
+
+      - name: Install llvm-mingw
+        if: steps.cache-llvm.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $v = "${{ env.LLVM_MINGW_VERSION }}"
+          $name = "llvm-mingw-$v-ucrt-x86_64"
+          $url = "https://github.com/mstorsjo/llvm-mingw/releases/download/$v/$name.zip"
+          Invoke-WebRequest $url -OutFile llvm.zip -UseBasicParsing
+          Expand-Archive llvm.zip -DestinationPath C:\llvm-tmp
+          Move-Item "C:\llvm-tmp\$name" C:\llvm-mingw
+
+      - name: Build and test
+        shell: cmd
+        env:
+          LLVM_MINGW_DIR: C:\llvm-mingw
+        run: scripts\build-clang.bat
+
+  interop:
+    name: interop (live WinRM)
+    runs-on: windows-latest
+    # Unit tests prove an encoding; only a live server proves a feature is
+    # reachable. The runner can be its own PSRP server, so drive the interop
+    # suite against localhost. Allowed to fail while this is still being
+    # proven out on hosted runners -- see TODO PSRP-31.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable PowerShell remoting on the runner
+        shell: pwsh
+        run: |
+          Enable-PSRemoting -Force -SkipNetworkProfileCheck
+          winrm get winrm/config/service
+          Test-WSMan -ComputerName localhost
+          # Prove the endpoint really runs a pipeline before blaming libpsrp
+          # for anything that fails afterwards.
+          Invoke-Command -ComputerName localhost -ScriptBlock { $PSVersionTable.PSVersion }
+
+      - name: Build
+        shell: cmd
+        run: scripts\build.bat
+
+      # No credentials: the config's default endpoint is localhost:5985 and a
+      # NULL username authenticates the current user over Negotiate, so there
+      # is no secret to store.
+      - name: Run the interop suite
+        shell: cmd
+        env:
+          PSRP_INTEROP: "1"
+        run: ctest --test-dir build\msvc -L interop --output-on-failure

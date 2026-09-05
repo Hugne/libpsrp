@@ -2,7 +2,10 @@
 rem Build + test libpsrp with llvm-mingw clang (Ninja).
 rem Usage: scripts\build-clang.bat [clean]
 setlocal
+rem LLVM_MINGW_DIR overrides the local toolchain location; CI points it at the
+rem llvm-mingw build it just unpacked.
 set LLVM=C:\Users\user\AppData\Local\Programs\llvm-mingw-20260602-ucrt-x86_64\bin
+if defined LLVM_MINGW_DIR set LLVM=%LLVM_MINGW_DIR%\bin
 if not exist "%LLVM%\clang.exe" ( echo clang not found at %LLVM% & exit /b 1 )
 set PATH=%LLVM%;%PATH%
 
