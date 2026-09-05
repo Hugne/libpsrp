@@ -1,5 +1,10 @@
 # libpsrp
 
+[![ci](https://github.com/Hugne/libpsrp/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/Hugne/libpsrp/actions/workflows/ci.yml)
+[![docs](https://github.com/Hugne/libpsrp/actions/workflows/docs.yml/badge.svg?branch=master)](https://github.com/Hugne/libpsrp/actions/workflows/docs.yml)
+[![API reference](https://img.shields.io/badge/API-reference-blue)](https://hugne.github.io/libpsrp/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 A C implementation of the PowerShell Remoting Protocol ([MS-PSRP]), client
 side, as a static library with a sans-IO core and a pluggable transport.
 
