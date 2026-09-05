@@ -1,4 +1,5 @@
-/* psrp_metadata.h - command metadata and user events
+/** @file
+ * psrp_metadata.h - command metadata and user events
  * ([MS-PSRP] 2.2.2.12, 2.2.2.14, 2.2.3.19-23).
  *
  * GET_COMMAND_METADATA asks the server which commands exist. Its results come
@@ -14,7 +15,7 @@
 extern "C" {
 #endif
 
-/* 2.2.3.19 CommandType: a 32-bit set of flags. The spec says PSRP does not
+/** 2.2.3.19 CommandType: a 32-bit set of flags. The spec says PSRP does not
  * interpret this and that the categories are defined by the higher layer, so
  * these are the well-known System.Management.Automation.CommandTypes values
  * offered as a convenience rather than as protocol constants. */
@@ -28,11 +29,11 @@ extern "C" {
 #define PSRP_COMMAND_TYPE_CONFIGURATION    0x0100
 #define PSRP_COMMAND_TYPE_ALL              0x017F
 
-/* Name of a single-flag command type, e.g. "Cmdlet". Returns NULL when the
+/** Name of a single-flag command type, e.g. "Cmdlet". Returns NULL when the
  * value is not exactly one known flag, since a set has no single name. */
 const char *psrp_command_type_name(int32_t command_type);
 
-/* 2.2.2.14 GET_COMMAND_METADATA.
+/** 2.2.2.14 GET_COMMAND_METADATA.
  *
  * `name_patterns` are Wildcards (2.2.3.20): ordinary strings where the escape
  * character is a backtick rather than a backslash. Passing none sends Null,
@@ -58,11 +59,11 @@ psrp_result_t psrp_build_get_command_metadata(const char *const *name_patterns,
                                               const psrp_value_t *argument_list,
                                               psrp_buffer_t *out);
 
-/* 2.2.3.21 CommandMetadataCount: the first object of the result stream. */
+/** 2.2.3.21 CommandMetadataCount: the first object of the result stream. */
 psrp_result_t psrp_parse_command_metadata_count(const void *xml, size_t n,
                                                 int32_t *count);
 
-/* The same, from an already-deserialized object.
+/** The same, from an already-deserialized object.
  *
  * Results arrive on the pipeline's output stream, so a caller sees them as
  * PSRP_EVENT_PIPELINE_OUTPUT with a parsed value, never as raw XML. Without
@@ -71,25 +72,25 @@ psrp_result_t psrp_parse_command_metadata_count(const void *xml, size_t n,
 psrp_result_t psrp_command_metadata_count_from_value(const psrp_value_t *v,
                                                      int32_t *count);
 
-/* 2.2.3.23 ParameterMetadata, one per parameter a command accepts. */
+/** 2.2.3.23 ParameterMetadata, one per parameter a command accepts. */
 typedef struct psrp_parameter_metadata {
-    char *name;            /* a non-empty String per the spec */
-    char *parameter_type;  /* a .NET type name; NULL when absent */
-    char **aliases;        /* alternative names */
+    char *name;            /**< a non-empty String per the spec */
+    char *parameter_type;  /**< a .NET type name; NULL when absent */
+    char **aliases;        /**< alternative names */
     size_t alias_count;
-    bool is_switch;        /* SwitchParameter */
-    bool is_dynamic;       /* IsDynamic */
+    bool is_switch;        /**< SwitchParameter */
+    bool is_dynamic;       /**< IsDynamic */
 } psrp_parameter_metadata_t;
 
-/* 2.2.3.22 CommandMetadata, one per command. */
+/** 2.2.3.22 CommandMetadata, one per command. */
 typedef struct psrp_command_metadata {
     char *name;
-    char *command_namespace;   /* Namespace; NULL when absent */
-    char *help_uri;            /* NULL when absent or Null */
-    int32_t command_type;      /* -1 when absent */
-    char **parameter_names;    /* keys of the Parameters dictionary */
+    char *command_namespace;   /**< Namespace; NULL when absent */
+    char *help_uri;            /**< NULL when absent or Null */
+    int32_t command_type;      /**< -1 when absent */
+    char **parameter_names;    /**< keys of the Parameters dictionary */
     size_t parameter_count;
-    /* One entry per parameter_names entry, in the same order. A parameter
+    /** One entry per parameter_names entry, in the same order. A parameter
      * whose metadata object was missing or unreadable still gets an entry,
      * with only its name filled in, so the two arrays stay aligned. */
     psrp_parameter_metadata_t *parameters;
@@ -101,14 +102,14 @@ psrp_result_t psrp_command_metadata_from_value(const psrp_value_t *v,
                                                psrp_command_metadata_t *out);
 void psrp_command_metadata_free(psrp_command_metadata_t *m);
 
-/* 2.2.2.12 USER_EVENT. The property names really do contain dots, e.g.
+/** 2.2.2.12 USER_EVENT. The property names really do contain dots, e.g.
  * "PSEventArgs.EventIdentifier". Sender, SourceArgs and MessageData are
  * arbitrary higher-layer objects and are not surfaced here. */
 typedef struct psrp_user_event {
-    int32_t event_id;          /* -1 when absent */
+    int32_t event_id;          /**< -1 when absent */
     char *source_identifier;
-    char *time_generated;      /* raw DateTime text */
-    char *computer_name;       /* NULL when absent or Null */
+    char *time_generated;      /**< raw DateTime text */
+    char *computer_name;       /**< NULL when absent or Null */
 } psrp_user_event_t;
 
 psrp_result_t psrp_parse_user_event(const void *xml, size_t n,

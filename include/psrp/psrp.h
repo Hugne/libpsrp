@@ -1,4 +1,5 @@
-/* psrp.h - umbrella header for libpsrp.
+/** @file
+ * psrp.h - umbrella header for libpsrp.
  *
  * libpsrp is a C implementation of the PowerShell Remoting Protocol
  * ([MS-PSRP]), client side. The protocol core performs no I/O: it is a state
@@ -20,7 +21,7 @@ extern "C" {
 #define PSRP_VERSION_MINOR 1
 #define PSRP_VERSION_PATCH 0
 
-/* "0.1.0" */
+/** "0.1.0" */
 const char *psrp_version_string(void);
 
 #ifdef __cplusplus

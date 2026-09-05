@@ -1,0 +1,45 @@
+# Doxygen configuration for libpsrp's public API reference.
+#
+# Only include/psrp is scanned: the documented surface is the public headers,
+# not the implementation. Generate with scripts\build-docs.bat, or let the
+# GitHub Actions workflow publish it to Pages.
+
+PROJECT_NAME           = libpsrp
+PROJECT_BRIEF          = "MS-PSRP (PowerShell Remoting Protocol) client, in C"
+PROJECT_NUMBER         = 0.1.0
+OUTPUT_DIRECTORY       = build/doc
+
+INPUT                  = include/psrp README.md
+EXAMPLE_PATH           = examples
+USE_MDFILE_AS_MAINPAGE = README.md
+RECURSIVE              = YES
+
+# C, not C++: no classes, and `typedef struct foo foo_t` should read as one type.
+OPTIMIZE_OUTPUT_FOR_C  = YES
+TYPEDEF_HIDES_STRUCT   = YES
+JAVADOC_AUTOBRIEF      = YES
+EXTRACT_ALL            = YES
+EXTRACT_STATIC         = NO
+SORT_MEMBER_DOCS       = NO
+MARKDOWN_SUPPORT       = YES
+
+# The headers guard their C linkage; without this doxygen sees an unclosed
+# extern "C" block and mis-scopes everything after it.
+ENABLE_PREPROCESSING   = YES
+MACRO_EXPANSION        = YES
+PREDEFINED             = __cplusplus=
+
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+GENERATE_TREEVIEW      = YES
+DISABLE_INDEX          = NO
+FULL_SIDEBAR           = NO
+HTML_COLORSTYLE        = TOGGLE
+SEARCHENGINE           = YES
+HTML_DYNAMIC_SECTIONS  = YES
+
+HAVE_DOT               = NO
+QUIET                  = YES
+WARNINGS               = YES
+WARN_NO_PARAMDOC       = NO
+WARN_AS_ERROR          = NO

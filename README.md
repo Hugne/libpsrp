@@ -166,6 +166,26 @@ instead; a debug MSVC run reports `(leak-checked)` when it is active.
 
 Both toolchains are kept green with warnings as errors.
 
+## Documentation
+
+The public headers carry the reference documentation, and Doxygen turns them
+into a browsable API site:
+
+    scriptsuild-docs.bat      # -> build\doc\html\index.html
+
+It needs doxygen on PATH (`winget install DimitriVanHeesch.Doxygen`); graphviz
+is not used. `.github/workflows/docs.yml` runs the same generation on every
+push and publishes the result to GitHub Pages.
+
+The script fails on any doxygen warning, deliberately. Comments here are full
+of CLIXML element names, and `<b>`, `<c>` and `<s>` are real HTML tags that
+doxygen will silently apply to the rendered page rather than print. Element
+names in comments therefore go in backticks, and a warning means a page is
+being quietly mangled.
+
+Only `include/psrp` is scanned. The implementation under `src/` is commented
+for people reading it, not for publication.
+
 ## Testing
 
 CTest drives unit, round-trip, golden-vector and interop tests. The default
