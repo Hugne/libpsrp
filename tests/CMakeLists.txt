@@ -76,6 +76,14 @@ target_include_directories(test_stress PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME interop.test_stress COMMAND test_stress)
 set_tests_properties(interop.test_stress PROPERTIES LABELS "interop" TIMEOUT 600)
 
+# The convenience layer against a live server. Written the way a caller
+# writes it -- no pump loop -- so it also fails if that promise stops holding.
+add_executable(test_client interop/test_client.c)
+target_link_libraries(test_client PRIVATE psrp psrp_flags)
+target_include_directories(test_client PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME interop.test_client COMMAND test_client)
+set_tests_properties(interop.test_client PROPERTIES LABELS "interop" TIMEOUT 600)
+
 # Public header self-containment.
 #
 # Every header must compile on its own, without another one having been

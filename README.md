@@ -79,12 +79,41 @@ Building needs CMake 3.20+, Ninja, and a C11 compiler; MSVC and clang are both
 kept green, with warnings as errors. The interop tests additionally need a
 reachable WinRM listener and credentials, and skip themselves without them.
 
-## Example
+## Two APIs
 
-`examples/run_command.c` is the whole shape of using the library in about a
-hundred lines:
+The library is a protocol implementation first: the session performs no I/O,
+so a caller moves bytes between it and a transport and reads an event queue.
+That is the right shape for implementing PSRP and the wrong shape for running
+a command, so there is a convenience layer on top of it.
+
+**`psrp_client.h`** — connect, run commands, read output:
+
+```c
+psrp_client_connect(&cfg, &c);
+psrp_client_run(c, "Get-Process | Select-Object -First 3", &r);
+/* r.output holds three objects; r.errors, r.warnings and the rest
+   stay separate; psrp_run_result_text flattens if that is all you want */
+psrp_run_result_free(&r);
+psrp_client_free(c);
+```
+
+One client keeps one RunspacePool open, so further commands cost a pipeline
+rather than a whole remote shell. That is the substantive reason to prefer it,
+ahead of the line count. It deliberately does not cover host callbacks,
+disconnect and reconnect, pipeline input, secure strings or command metadata;
+`psrp_client_session` and `psrp_client_transport` hand back the objects
+underneath so those stay reachable without rewriting anything.
+
+The layer is written entirely against the public API below it and adds no
+entry point into the state machine, so it is a convenience rather than a
+privileged path.
+
+**Everything else** is that lower level, and `examples/run_command.c` is the
+honest picture of it in about a hundred lines: the session, the transport, and
+the pump loop that joins them.
 
 ```
+example_quick_run  http://localhost:5985/wsman Administrator pw "1..3" "$PID"
 example_run_command http://localhost:5985/wsman Administrator pw "Get-Date; 6*7"
 2026-09-05
 42
@@ -153,11 +182,13 @@ instead; a debug MSVC run reports `(leak-checked)` when it is active.
 - `src/core/` — buffers, base64, hex, UTF-8/UTF-16, GUIDs.
 - `src/proto/` — fragments, message header, CLIXML, typed message bodies.
 - `src/state/` — the client state machine (no I/O).
+- `src/client/` — the convenience layer, built on the public API.
 - `src/transport/` — WSMan transport.
 - `src/xml/` — XmlLite backend behind a pull-parser seam.
 - `PLAN.md`, `SPEC-COVERAGE.md`, `TODO.md` — design, per-section coverage,
   and everything deliberately deferred.
-- `reference/doc/` — the [MS-PSRP] specification (PDF plus extracted text).
+- `examples/` — `run_command.c` (the protocol, explicitly) and
+  `quick_run.c` (the same job through `psrp_client.h`).
 
 ## Build
 

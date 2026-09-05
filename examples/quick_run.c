@@ -1,0 +1,107 @@
+/* The same job as run_command.c, using the convenience layer.
+ *
+ *   quick_run <connection> <user> <password> <command> [<command> ...]
+ *   quick_run http://localhost:5985/wsman Administrator secret "Get-Date"
+ *
+ * run_command.c is the honest picture of the protocol: a session that does no
+ * I/O, a transport that does, and a pump loop joining them. Read that one to
+ * understand the library. Read this one to use it.
+ *
+ * Note that several commands share one connection. That is the substantive
+ * difference, not the line count: each extra command here costs a pipeline,
+ * where a fresh client per command would cost a whole remote shell.
+ */
+
+#include <windows.h>
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "psrp/psrp_client.h"
+
+static wchar_t *widen(const char *s)
+{
+    size_t n;
+    wchar_t *w;
+    if (!s) return NULL;
+    n = strlen(s) + 1;
+    w = (wchar_t *)calloc(n, sizeof *w);
+    if (!w) return NULL;
+    MultiByteToWideChar(CP_UTF8, 0, s, -1, w, (int)n);
+    return w;
+}
+
+/* Prints one stream, if it has anything in it. */
+static void print_stream(const char *label, const psrp_stream_t *st, FILE *to)
+{
+    size_t i;
+    for (i = 0; i < st->count; i++)
+        fprintf(to, "%s: %s\n", label, st->items[i]);
+}
+
+int main(int argc, char **argv)
+{
+    psrp_client_config_t cfg;
+    psrp_client_t *c = NULL;
+    wchar_t *wconn = NULL, *wuser = NULL, *wpass = NULL;
+    int status = 1;
+    int i;
+
+    if (argc < 5) {
+        fprintf(stderr,
+                "usage: %s <connection> <user> <password> <command>...\n"
+                "  e.g. %s http://localhost:5985/wsman Administrator pw "
+                "\"Get-Date\" \"$PID\"\n",
+                argv[0], argv[0]);
+        return 2;
+    }
+
+    wconn = widen(argv[1]);
+    wuser = widen(argv[2]);
+    wpass = widen(argv[3]);
+
+    memset(&cfg, 0, sizeof cfg);
+    cfg.connection = wconn;
+    cfg.username = wuser;
+    cfg.password = wpass;
+
+    if (psrp_client_connect(&cfg, &c) != PSRP_OK) {
+        fprintf(stderr, "connect failed\n");
+        goto done;
+    }
+
+    status = 0;
+    for (i = 4; i < argc; i++) {
+        psrp_run_result_t r;
+        psrp_buffer_t text;
+
+        if (psrp_client_run(c, argv[i], &r) != PSRP_OK) {
+            fprintf(stderr, "%s: %s\n", argv[i], psrp_client_last_error(c));
+            status = 1;
+            continue;
+        }
+
+        psrp_buffer_init(&text);
+        if (psrp_run_result_text(&r, &text) == PSRP_OK &&
+            psrp_buffer_append_u8(&text, 0) == PSRP_OK)
+            fputs((const char *)text.data, stdout);
+        psrp_buffer_free(&text);
+
+        /* Kept apart from the output on purpose: a caller that pipes stdout
+         * somewhere still wants to see these. */
+        print_stream("error", &r.errors, stderr);
+        print_stream("warning", &r.warnings, stderr);
+
+        if (r.state != PSRP_INVOCATION_COMPLETED) {
+            fprintf(stderr, "[%s]\n", psrp_invocation_state_name(r.state));
+            status = 1;
+        }
+        psrp_run_result_free(&r);
+    }
+
+done:
+    psrp_client_free(c);
+    free(wconn); free(wuser); free(wpass);
+    return status;
+}

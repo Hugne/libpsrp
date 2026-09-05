@@ -1,0 +1,208 @@
+/* Live interop test for the convenience layer (psrp_client_*).
+ *
+ * The point of this layer is that a caller need not understand the sans-IO
+ * split to run a command, so the test is written the way a caller would write
+ * it: no pump loop, no event queue, no payload buffers.
+ *
+ * It is opt-in like the other interop tests. Set PSRP_INTEROP=1; PSRP_USER /
+ * PSRP_PASS supply credentials and PSRP_CONNECTION overrides the endpoint.
+ * With nothing set it reports success without connecting, so a default ctest
+ * run stays green on a machine with no WinRM.
+ *
+ * What is worth proving here, beyond "it works":
+ *
+ *   - output survives as objects, not as a pre-flattened string;
+ *   - the five streams stay apart, which is the thing a single output string
+ *     would have destroyed;
+ *   - one client runs several commands, because reusing a pool rather than
+ *     paying for a shell per command is the real reason this layer exists;
+ *   - a command that fails is reported as failing rather than as empty
+ *     output, which is the failure mode a convenience wrapper invites.
+ */
+#include <windows.h>
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "psrp/psrp_client.h"
+#include "psrp/psrp_records.h"
+
+static int failures;
+
+static void check(int ok, const char *what)
+{
+    printf("  %-52s %s\n", what, ok ? "ok" : "FAIL");
+    if (!ok) failures++;
+}
+
+static wchar_t *widen(const char *s)
+{
+    size_t n;
+    wchar_t *w;
+    if (!s) return NULL;
+    n = strlen(s) + 1;
+    w = (wchar_t *)calloc(n, sizeof *w);
+    if (!w) return NULL;
+    MultiByteToWideChar(CP_UTF8, 0, s, -1, w, (int)n);
+    return w;
+}
+
+/* Flattens a result to a NUL-terminated string for substring assertions. */
+static char *result_text(const psrp_run_result_t *r)
+{
+    psrp_buffer_t b;
+    char *out = NULL;
+
+    psrp_buffer_init(&b);
+    if (psrp_run_result_text(r, &b) == PSRP_OK &&
+        psrp_buffer_append_u8(&b, 0) == PSRP_OK) {
+        out = (char *)malloc(b.len);
+        if (out) memcpy(out, b.data, b.len);
+    }
+    psrp_buffer_free(&b);
+    return out;
+}
+
+int main(void)
+{
+    const char *enabled = getenv("PSRP_INTEROP");
+    psrp_client_config_t cfg;
+    psrp_client_t *c = NULL;
+    psrp_run_result_t r;
+    psrp_command_t *cmd = NULL;
+    wchar_t *wuser = NULL, *wpass = NULL, *wconn = NULL;
+    char *text = NULL;
+    psrp_result_t rc;
+    int i;
+
+    if (!enabled || strcmp(enabled, "1") != 0) {
+        printf("skipped: set PSRP_INTEROP=1 to run the client test\n");
+        return 0;
+    }
+
+    wuser = widen(getenv("PSRP_USER"));
+    wpass = widen(getenv("PSRP_PASS"));
+    wconn = widen(getenv("PSRP_CONNECTION"));
+
+    memset(&cfg, 0, sizeof cfg);
+    cfg.connection = wconn;
+    cfg.username = wuser;
+    cfg.password = wpass;
+    cfg.operation_timeout_ms = 60000;
+
+    printf("connect\n");
+    rc = psrp_client_connect(&cfg, &c);
+    if (rc != PSRP_OK) {
+        printf("  FAIL: connect: %s\n", psrp_strerror(rc));
+        return 1;
+    }
+    check(c != NULL, "connect opened a pool");
+
+    /* ---- output stays as objects ------------------------------------- */
+    printf("objects\n");
+    rc = psrp_client_run(c, "1..3", &r);
+    check(rc == PSRP_OK, "run 1..3 returned PSRP_OK");
+    check(r.state == PSRP_INVOCATION_COMPLETED, "pipeline completed");
+    check(r.output_count == 3, "three separate output objects, not one blob");
+    text = result_text(&r);
+    check(text && strstr(text, "1") && strstr(text, "3"),
+          "text helper flattens them");
+    free(text); text = NULL;
+    check(!r.had_errors, "no errors reported");
+    psrp_run_result_free(&r);
+
+    /* Freeing twice must be safe: the header promises it. */
+    psrp_run_result_free(&r);
+    check(r.output_count == 0, "double free of a result is safe");
+
+    /* ---- the streams stay apart --------------------------------------- */
+    printf("streams\n");
+    rc = psrp_client_run(c,
+        "Write-Output 'out'; Write-Error 'bad'; Write-Warning 'warn'; "
+        "$VerbosePreference='Continue'; Write-Verbose 'chatty'", &r);
+    check(rc == PSRP_OK, "mixed-stream command ran");
+    check(r.output_count == 1, "only 'out' landed in output");
+    check(r.errors.count == 1, "the error went to the error stream");
+    check(r.had_errors, "had_errors is set");
+    check(r.errors.count && strstr(r.errors.items[0], "bad") != NULL,
+          "error text preserved");
+    check(r.warnings.count == 1, "the warning went to the warning stream");
+    check(r.verbose.count == 1, "the verbose record went to its own stream");
+    psrp_run_result_free(&r);
+
+    /* ---- a failing command is reported as failing ---------------------- */
+    printf("failure\n");
+    rc = psrp_client_run(c, "throw 'deliberate'", &r);
+    check(rc == PSRP_OK, "a throwing command still returns PSRP_OK");
+    check(r.state == PSRP_INVOCATION_FAILED,
+          "and reports FAILED rather than empty output");
+    check(r.errors.count >= 1, "with the reason on the error stream");
+    psrp_run_result_free(&r);
+
+    /* ---- one pool, many commands -------------------------------------- */
+    printf("pool reuse\n");
+    for (i = 0; i < 5; i++) {
+        rc = psrp_client_run(c, "$PID", &r);
+        if (rc != PSRP_OK || r.output_count != 1) {
+            psrp_run_result_free(&r);
+            break;
+        }
+        psrp_run_result_free(&r);
+    }
+    check(i == 5, "five commands over a single connection");
+
+    /* The server-side process must be the same one throughout: a new shell
+     * per command would show a different $PID and would mean the pool was
+     * being rebuilt behind the caller's back. */
+    {
+        char first[64] = {0};
+        char again[64] = {0};
+
+        rc = psrp_client_run(c, "$PID", &r);
+        text = result_text(&r);
+        if (text) { strncpy(first, text, sizeof first - 1); free(text); text = NULL; }
+        psrp_run_result_free(&r);
+
+        rc = psrp_client_run(c, "$PID", &r);
+        text = result_text(&r);
+        if (text) { strncpy(again, text, sizeof again - 1); free(text); text = NULL; }
+        psrp_run_result_free(&r);
+
+        check(first[0] && strcmp(first, again) == 0,
+              "and they share one server-side runspace");
+    }
+
+    /* ---- parameters as parameters ------------------------------------- */
+    printf("parameterised command\n");
+    cmd = psrp_command_new("Write-Output", false);
+    if (cmd && psrp_command_add_string_parameter(cmd, "InputObject",
+                                                 "parameterised") == PSRP_OK) {
+        rc = psrp_client_run_command(c, cmd, &r);
+        check(rc == PSRP_OK && r.state == PSRP_INVOCATION_COMPLETED,
+              "run_command with a real parameter");
+        text = result_text(&r);
+        check(text && strstr(text, "parameterised") != NULL,
+              "parameter reached the server");
+        free(text); text = NULL;
+        psrp_run_result_free(&r);
+    } else {
+        check(0, "building a parameterised command");
+    }
+    psrp_command_free(cmd);
+
+    /* ---- the escape hatch is real ------------------------------------- */
+    printf("escape hatch\n");
+    check(psrp_client_session(c) != NULL, "session is reachable");
+    check(psrp_client_transport(c) != NULL, "transport is reachable");
+    check(psrp_session_pool_state(psrp_client_session(c)) ==
+          PSRP_RUNSPACE_OPENED,
+          "and the low-level view agrees the pool is open");
+
+    psrp_client_free(c);
+    free(wuser); free(wpass); free(wconn);
+
+    printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED",
+           failures, failures == 1 ? "" : "s");
+    return failures ? 1 : 0;
+}

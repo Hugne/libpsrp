@@ -3,8 +3,12 @@
  *   run_command <connection> <user> <password> <command>
  *   run_command http://localhost:5985/wsman Administrator secret "Get-Date"
  *
- * This is the whole shape of using the library, in about a hundred lines. The
- * two halves are worth noticing:
+ * This is the protocol, explicitly. If you only want to run a command, read
+ * quick_run.c instead: psrp_client.h does all of the below for you. Read this
+ * one to understand what it is doing, or when you need something the
+ * convenience layer does not cover.
+ *
+ * The two halves are worth noticing:
  *
  *   - psrp_session_* is the protocol. It performs no I/O at all. You hand it
  *     bytes that arrived and it hands you events and bytes to send.
