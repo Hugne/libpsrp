@@ -168,8 +168,10 @@ Both toolchains are kept green with warnings as errors.
 
 ## Documentation
 
-The public headers carry the reference documentation, and Doxygen turns them
-into a browsable API site:
+The API reference is published at **https://hugne.github.io/libpsrp/**.
+
+The public headers carry that documentation, and Doxygen turns them into a
+browsable site:
 
     scriptsuild-docs.bat      # -> build\doc\html\index.html
 

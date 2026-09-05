@@ -24,11 +24,21 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y doxygen
 
       # Warnings are failures: an unescaped XML tag in a comment silently
-      # mangles the rendered page rather than erroring.
+      # mangles the rendered page rather than erroring. Config-level warnings
+      # are exempt, because this doxygen is whatever apt ships and need not
+      # match the one the Doxyfile was written against; a version disagreement
+      # about a config tag is not a defect in the documentation.
       - name: Generate
         run: |
-          doxygen docs/Doxyfile 2>warnings.txt
-          if [ -s warnings.txt ]; then cat warnings.txt; exit 1; fi
+          doxygen --version
+          doxygen docs/Doxyfile 2>warnings.txt || true
+          cat warnings.txt
+          grep -vE "(obsolete|Unknown tag|unsupported tag|ignoring unsupported)" warnings.txt > real.txt || true
+          if [ -s real.txt ]; then
+            echo "::error::doxygen reported documentation warnings"
+            exit 1
+          fi
+          test -f build/doc/html/index.html
 
       - uses: actions/upload-pages-artifact@v3
         with:
