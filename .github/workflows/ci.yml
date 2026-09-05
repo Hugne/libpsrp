@@ -77,6 +77,53 @@ jobs:
       - name: Test
         run: ctest --test-dir build/linux --output-on-failure
 
+  valgrind:
+    name: valgrind (Linux)
+    runs-on: ubuntu-latest
+    # What the Linux port bought us. The Windows build has had debug-CRT leak
+    # checking for a while, but nothing was watching for reads of uninitialised
+    # memory or invalid accesses; memcheck does, and the parsers are where that
+    # would matter, since they are the code a hostile server reaches directly.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libxml2-dev libssl-dev valgrind
+
+      - name: Build
+        run: |
+          cmake -G Ninja -S . -B build/vg -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build/vg
+
+      # Any output on stderr is also a failure: a library has no business
+      # writing to a caller's terminal, and libxml2 does exactly that on
+      # malformed input unless told not to.
+      - name: memcheck every test
+        run: |
+          fail=0
+          for t in build/vg/tests/test_* build/vg/tests/fuzz_*; do
+            [ -x "$t" ] || continue
+            case "$t" in *.*) continue;; esac
+            err=$(valgrind --error-exitcode=42 --leak-check=full                     --show-leak-kinds=definite,indirect                     --errors-for-leak-kinds=definite,indirect                     --track-origins=yes --quiet "$t" 2>&1 >/dev/null) || fail=1
+            if [ -n "$err" ]; then
+              echo "::error::$(basename $t) reported: $err"
+              fail=1
+            else
+              echo "ok $(basename $t)"
+            fi
+          done
+          exit $fail
+
+      - name: memcheck a parser soak
+        env:
+          PSRP_FUZZ_ITERATIONS: "100000"
+        run: |
+          for seed in 1 2; do
+            PSRP_FUZZ_SEED=$seed valgrind --error-exitcode=42 --leak-check=full               --errors-for-leak-kinds=definite,indirect --quiet               build/vg/tests/fuzz_parsers >/dev/null
+          done
+
   interop:
     name: interop (live WinRM)
     runs-on: windows-latest

@@ -306,6 +306,14 @@ testing: the same 8..16384 byte sweep, the same deterministic payload, exact
 length and SHA256 verified, and a liveness check afterwards. Only the route the
 bytes take changed, from a pipe to a CLIXML `<BA>` carried as pipeline input.
 
+Since the Linux port, every test and a parser soak also run under valgrind in
+CI, and any output on stderr fails the job as well. The Windows build had
+debug-CRT leak checking already; what memcheck adds is reads of uninitialised
+memory and invalid accesses, which matter most in the parsers because that is
+the code a hostile server reaches first. It found nothing on the first run
+across 24 binaries and 450,000 fuzz iterations -- but it did catch libxml2
+printing parse diagnostics to the caller's stderr, which XmlLite never did.
+
 Serialization behaviour is pinned against real PowerShell output rather than
 the spec's prose, which is looser than the implementation in several places.
 

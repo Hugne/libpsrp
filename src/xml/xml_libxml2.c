@@ -121,10 +121,18 @@ psrp_result_t psrp_xml_reader_create(const void *utf8, size_t n,
     if (!r) return PSRP_ERR_NOMEM;
 
     /* The input is borrowed rather than copied, as the seam specifies.
+     *
      * XML_PARSE_NONET because resolving anything over the network would be a
-     * bug at best: CLIXML has no legitimate external references. */
+     * bug at best: CLIXML has no legitimate external references.
+     *
+     * NOERROR and NOWARNING because libxml2 otherwise writes parse diagnostics
+     * straight to stderr. Malformed input is an ordinary, tested outcome here
+     * -- it is what a hostile or broken server sends -- and the caller learns
+     * about it from PSRP_ERR_XML, not from text appearing on their terminal.
+     * XmlLite is silent, and the two backends have to behave alike. */
     r->r = xmlReaderForMemory((const char *)utf8, (int)n, NULL, "UTF-8",
-                              XML_PARSE_NONET);
+                              XML_PARSE_NONET | XML_PARSE_NOERROR |
+                              XML_PARSE_NOWARNING);
     if (!r->r) { free(r); return PSRP_ERR_XML; }
 
     *out = r;
