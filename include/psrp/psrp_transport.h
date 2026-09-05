@@ -109,10 +109,18 @@ psrp_result_t psrp_transport_reconnect(psrp_transport_t *t);
 
 /* wxf:Connect (3.1.5.3.14), for a client adopting someone else's shell.
  * `payload` is the SESSION_CAPABILITY and CONNECT_RUNSPACEPOOL pair from
- * psrp_session_connect_payload, which rides in the message's open content. */
+ * psrp_session_connect_payload, which rides in the message's open content.
+ *
+ * The server answers in kind: 3.1.5.3.15 puts its own SESSION_CAPABILITY in
+ * the ConnectResponse's open content, not on the stream. On success that
+ * decoded content is written to `response_payload` (which may be NULL to
+ * discard it), and the caller feeds it to psrp_session_receive exactly as it
+ * would bytes from psrp_transport_receive. A response without it fails the
+ * connect, which is what the spec requires. */
 psrp_result_t psrp_transport_connect(psrp_transport_t *t,
                                      const psrp_guid_t *shell_id,
-                                     const void *payload, size_t len);
+                                     const void *payload, size_t len,
+                                     psrp_buffer_t *response_payload);
 
 /* True while the shell is disconnected. */
 bool psrp_transport_is_disconnected(const psrp_transport_t *t);

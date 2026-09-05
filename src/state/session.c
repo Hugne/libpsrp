@@ -57,6 +57,14 @@ struct psrp_session {
     psrp_host_default_data_t host_console;
     char host_title[128];
 
+    /* True from CONNECT_RUNSPACEPOOL until the negotiation answers it. The
+     * connect flow ends differently from an open: 3.1.4.10.3 step 6 has the
+     * client itself move to Opened once SESSION_CAPABILITY arrives, and the
+     * server sends no RUNSPACEPOOL_STATE for it. Without knowing which flow
+     * this is, the session sits in NegotiationSucceeded waiting for a message
+     * that never comes. */
+    bool connecting;
+
     psrp_defrag_t *defrag;
     psrp_buffer_t outgoing;
     psrp_buffer_t outgoing_pr;   /* host responses; the WSMan "pr" stream */
@@ -456,7 +464,10 @@ psrp_result_t psrp_session_connect_payload(psrp_session_t *s,
     psrp_buffer_free(&cap);
     psrp_buffer_free(&conn);
 
-    if (rc == PSRP_OK) s->pool_state = PSRP_RUNSPACE_NEGOTIATION_SENT;
+    if (rc == PSRP_OK) {
+        s->pool_state = PSRP_RUNSPACE_NEGOTIATION_SENT;
+        s->connecting = true;
+    }
     return rc;
 }
 
@@ -906,10 +917,18 @@ static psrp_result_t dispatch(psrp_session_t *s, const psrp_message_t *m)
          * failure is reported as a state change rather than an error return,
          * because a broken negotiation is a protocol outcome the caller has
          * to see, not a decoding fault. */
-        if (capability_acceptable(&s->server_capability))
-            s->pool_state = PSRP_RUNSPACE_NEGOTIATION_SUCCEEDED;
-        else
+        if (!capability_acceptable(&s->server_capability)) {
             s->pool_state = PSRP_RUNSPACE_BROKEN;
+        } else if (s->connecting) {
+            /* 3.1.4.10.3 step 6: in the connect flow the client itself moves
+             * to Opened here. The pool already exists on the server, so there
+             * is no INIT_RUNSPACEPOOL to answer and no RUNSPACEPOOL_STATE
+             * coming; waiting for one would wait forever. */
+            s->pool_state = PSRP_RUNSPACE_OPENED;
+            s->connecting = false;
+        } else {
+            s->pool_state = PSRP_RUNSPACE_NEGOTIATION_SUCCEEDED;
+        }
         event_init(&e, PSRP_EVENT_SESSION_CAPABILITY, m->type, NULL);
         e.state = s->pool_state;
         e.text = dup_cstr(s->server_capability.protocol_version);

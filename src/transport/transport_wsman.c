@@ -29,7 +29,38 @@ typedef struct async_op {
     HANDLE done;
     DWORD error;
     wchar_t detail[512];
+    /* A wxf:ConnectResponse carries open content (3.1.5.3.15), and the winrm
+     * stack owns that buffer only for the duration of the callback, so it is
+     * copied out here. Unused by every other operation. */
+    char *response_utf8;
+    size_t response_len;
 } async_op_t;
+
+/* Copies WSMAN_DATA out as UTF-8, whichever form it arrived in. */
+static void capture_response(async_op_t *op, const WSMAN_DATA *d)
+{
+    if (!d) return;
+    if (d->type == WSMAN_DATA_TYPE_TEXT && d->text.buffer && d->text.bufferLength) {
+        int n = WideCharToMultiByte(CP_UTF8, 0, d->text.buffer,
+                                    (int)d->text.bufferLength, NULL, 0, NULL,
+                                    NULL);
+        if (n <= 0) return;
+        op->response_utf8 = (char *)malloc((size_t)n + 1);
+        if (!op->response_utf8) return;
+        WideCharToMultiByte(CP_UTF8, 0, d->text.buffer,
+                            (int)d->text.bufferLength, op->response_utf8, n,
+                            NULL, NULL);
+        op->response_utf8[n] = '\0';
+        op->response_len = (size_t)n;
+    } else if (d->type == WSMAN_DATA_TYPE_BINARY &&
+               d->binaryData.data && d->binaryData.dataLength) {
+        op->response_utf8 = (char *)malloc(d->binaryData.dataLength + 1);
+        if (!op->response_utf8) return;
+        memcpy(op->response_utf8, d->binaryData.data, d->binaryData.dataLength);
+        op->response_utf8[d->binaryData.dataLength] = '\0';
+        op->response_len = d->binaryData.dataLength;
+    }
+}
 
 static void op_init(async_op_t *op)
 {
@@ -40,6 +71,8 @@ static void op_init(async_op_t *op)
 static void op_destroy(async_op_t *op)
 {
     if (op->done) CloseHandle(op->done);
+    free(op->response_utf8);
+    op->response_utf8 = NULL;
 }
 
 static void CALLBACK generic_completion(PVOID ctx, DWORD flags,
@@ -61,6 +94,24 @@ static void CALLBACK generic_completion(PVOID ctx, DWORD flags,
     }
     if ((flags & WSMAN_FLAG_CALLBACK_END_OF_OPERATION) || error)
         SetEvent(op->done);
+}
+
+/* Completion for WSManConnectShell. Identical to the generic one except that
+ * the response's open content is kept: 3.1.5.3.15 puts the server's
+ * SESSION_CAPABILITY there, in a <connectResponseXml> element, and nowhere
+ * else. A connect that ignored it, as this transport did, could never
+ * negotiate. */
+static void CALLBACK connect_completion(PVOID ctx, DWORD flags,
+                                        WSMAN_ERROR *error,
+                                        WSMAN_SHELL_HANDLE shell,
+                                        WSMAN_COMMAND_HANDLE command,
+                                        WSMAN_OPERATION_HANDLE op_handle,
+                                        WSMAN_RESPONSE_DATA *data)
+{
+    async_op_t *op = (async_op_t *)ctx;
+    (void)shell; (void)command; (void)op_handle;
+    if (data && !op->response_utf8) capture_response(op, &data->connectData.data);
+    generic_completion(ctx, flags, error, shell, command, op_handle, NULL);
 }
 
 /* ------------------------------------------------------------ receive ---- */
@@ -341,18 +392,36 @@ void psrp_transport_free(psrp_transport_t *t)
     free(t);
 }
 
-/* Formats a GUID as the wide hyphenated string WSMan wants for its ids. */
+/* Formats a GUID as the wide hyphenated string WSMan wants for its ids.
+ *
+ * Upper case, deliberately. psrp_guid_format writes lower case, and a shell
+ * created under a lower-case id works fine, but the server reports that same
+ * id back in upper case, and WSManConnectShell matches the ShellId selector
+ * case-sensitively: connecting with the lower-case form fails with 0x8033805B,
+ * "shell was not found", for a shell enumeration had just listed. PowerShell's
+ * own client sends ids in upper case throughout, so this does the same. */
 static psrp_result_t guid_to_wide(const psrp_guid_t *g, wchar_t out[64])
 {
     char narrow[PSRP_GUID_BUF_SIZE];
+    size_t i;
     psrp_result_t rc = psrp_guid_format(g, narrow, sizeof narrow);
     if (rc != PSRP_OK) return rc;
+    for (i = 0; narrow[i]; i++)
+        if (narrow[i] >= 'a' && narrow[i] <= 'f') narrow[i] = (char)(narrow[i] - 32);
     MultiByteToWideChar(CP_UTF8, 0, narrow, -1, out, 64);
     return PSRP_OK;
 }
 
-/* Builds <creationXml xmlns="...powershell">base64</creationXml> as UTF-16. */
-static psrp_result_t build_creation_xml(const void *payload, size_t len,
+/* Builds <element xmlns="...powershell">base64</element> as UTF-16: the open
+ * content of a wxf:Create or wxf:Connect.
+ *
+ * The element name is not decoration. 3.1.5.3.1 names it creationXml for a
+ * Create and 3.1.5.3.14 names it connectXml for a Connect, and the PowerShell
+ * plugin looks for the one it expects: a Connect carrying a creationXml
+ * element reaches the plugin and comes back as a .NET exception
+ * (0xE0434352), because the payload it went looking for is not there. */
+static psrp_result_t build_open_content(const char *element,
+                                        const void *payload, size_t len,
                                         wchar_t **out)
 {
     psrp_buffer_t b64, utf8, utf16;
@@ -364,11 +433,15 @@ static psrp_result_t build_creation_xml(const void *payload, size_t len,
     psrp_buffer_init(&utf16);
 
     rc = psrp_base64_encode_buf(&b64, payload, len);
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(&utf8, "<");
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(&utf8, element);
     if (rc == PSRP_OK)
         rc = psrp_buffer_append_str(&utf8,
-            "<creationXml xmlns=\"http://schemas.microsoft.com/powershell\">");
+            " xmlns=\"http://schemas.microsoft.com/powershell\">");
     if (rc == PSRP_OK) rc = psrp_buffer_append(&utf8, b64.data, b64.len);
-    if (rc == PSRP_OK) rc = psrp_buffer_append_str(&utf8, "</creationXml>");
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(&utf8, "</");
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(&utf8, element);
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(&utf8, ">");
     if (rc == PSRP_OK) rc = psrp_utf8_to_utf16(utf8.data, utf8.len, &utf16);
     /* UTF-16 NUL terminator. */
     if (rc == PSRP_OK) rc = psrp_buffer_append_u8(&utf16, 0);
@@ -422,7 +495,7 @@ psrp_result_t psrp_transport_open(psrp_transport_t *t,
 
     rc = guid_to_wide(shell_id, shell_id_w);
     if (rc != PSRP_OK) return rc;
-    rc = build_creation_xml(payload, len, &creation);
+    rc = build_open_content("creationXml", payload, len, &creation);
     if (rc != PSRP_OK) return rc;
 
     in_set.streamIDsCount = 2;  in_set.streamIDs = in_streams;
@@ -684,6 +757,18 @@ static void start_reconnect(psrp_transport_t *t, WSMAN_SHELL_ASYNC *async)
     WSManReconnectShell(t->shell, 0, async);
 }
 
+/* Reconnecting the shell does not reattach its commands. A pipeline that ran
+ * on while we were away has its output buffered against the command, and
+ * that stream stays detached until the command itself is reconnected. Without
+ * this, a reconnect after a busy disconnect came back to silence: the pool
+ * was fine and the pipeline's output was simply never delivered. PowerShell's
+ * client reconnects each command after the shell for exactly this reason. */
+static void start_reconnect_command(psrp_transport_t *t,
+                                    WSMAN_SHELL_ASYNC *async)
+{
+    WSManReconnectShellCommand(t->command, 0, async);
+}
+
 psrp_result_t psrp_transport_disconnect(psrp_transport_t *t,
                                         uint32_t idle_timeout_ms)
 {
@@ -727,6 +812,11 @@ psrp_result_t psrp_transport_reconnect(psrp_transport_t *t)
         reset_receive(&t->shell_rx);
         post_receive(t, &t->shell_rx, NULL);
         if (t->command) {
+            /* The command has to be reattached before its Receive means
+             * anything; see start_reconnect_command. A failure here is
+             * reported but does not undo the shell reconnect, which stands. */
+            rc = run_shell_op(t, "WSManReconnectShellCommand",
+                              start_reconnect_command);
             reset_receive(&t->cmd_rx);
             post_receive(t, &t->cmd_rx, t->command);
         }
@@ -734,17 +824,49 @@ psrp_result_t psrp_transport_reconnect(psrp_transport_t *t)
     return rc;
 }
 
+/* Pulls the base64 out of <connectResponseXml ...>...</connectResponseXml>
+ * and decodes it. Whitespace inside the element is skipped, since the spec's
+ * own example wraps the encoded text across lines. */
+static psrp_result_t decode_connect_response(const char *xml, size_t n,
+                                             psrp_buffer_t *out)
+{
+    const char *open_tag, *start, *end;
+    psrp_buffer_t compact;
+    psrp_result_t rc;
+    size_t i;
+
+    open_tag = strstr(xml, "<connectResponseXml");
+    if (!open_tag) return PSRP_ERR_MALFORMED;
+    start = strchr(open_tag, '>');
+    if (!start) return PSRP_ERR_MALFORMED;
+    start++;
+    end = strstr(start, "</connectResponseXml>");
+    if (!end) return PSRP_ERR_MALFORMED;
+    (void)n;
+
+    psrp_buffer_init(&compact);
+    rc = PSRP_OK;
+    for (i = 0; rc == PSRP_OK && start + i < end; i++) {
+        char c = start[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        rc = psrp_buffer_append_u8(&compact, (uint8_t)c);
+    }
+    if (rc == PSRP_OK)
+        rc = psrp_base64_decode((const char *)compact.data, compact.len, out);
+    psrp_buffer_free(&compact);
+    return rc;
+}
+
 psrp_result_t psrp_transport_connect(psrp_transport_t *t,
                                      const psrp_guid_t *shell_id,
-                                     const void *payload, size_t len)
+                                     const void *payload, size_t len,
+                                     psrp_buffer_t *response_payload)
 {
     wchar_t shell_id_w[64];
     wchar_t *connect_xml = NULL;
     async_op_t op;
     WSMAN_SHELL_ASYNC async;
     WSMAN_DATA data;
-    WSMAN_OPTION protocol_option;
-    WSMAN_OPTION_SET options;
     psrp_result_t rc;
 
     if (!t || !shell_id || (len && !payload)) return PSRP_ERR_INVALID_ARG;
@@ -752,9 +874,10 @@ psrp_result_t psrp_transport_connect(psrp_transport_t *t,
 
     rc = guid_to_wide(shell_id, shell_id_w);
     if (rc != PSRP_OK) return rc;
-    /* The open content of a Connect uses the same connectXml wrapper shape as
-     * a Create's creationXml. */
-    rc = build_creation_xml(payload, len, &connect_xml);
+    /* Same wrapper shape as a Create's open content, different element name:
+     * 3.1.5.3.14 requires connectXml here, and the plugin will not find the
+     * payload under any other. */
+    rc = build_open_content("connectXml", payload, len, &connect_xml);
     if (rc != PSRP_OK) return rc;
 
     memset(&data, 0, sizeof data);
@@ -762,19 +885,18 @@ psrp_result_t psrp_transport_connect(psrp_transport_t *t,
     data.text.buffer = connect_xml;
     data.text.bufferLength = (DWORD)wcslen(connect_xml);
 
-    memset(&protocol_option, 0, sizeof protocol_option);
-    protocol_option.name = L"protocolversion";
-    protocol_option.value = L"2.2";
-    protocol_option.mustComply = TRUE;
-    memset(&options, 0, sizeof options);
-    options.optionsCount = 1;
-    options.options = &protocol_option;
-    options.optionsMustUnderstand = TRUE;
-
     op_init(&op);
     async.operationContext = &op;
-    async.completionFunction = generic_completion;
-    WSManConnectShell(t->session, 0, kResourceUri, shell_id_w, &options, &data,
+    async.completionFunction = connect_completion;
+    /* No OptionSet on a Connect, unlike a Create. The WSMan client keeps the
+     * options given to WSManConnectShell on the shell handle and re-sends
+     * them with every later operation, and the server then rejects the very
+     * next Receive with 0x80338039, "invalid or duplicated OptionSet".
+     * 3.1.5.3.14 lists protocolversion for the Connect, but the pool already
+     * exists with a version negotiated at its creation and the server does not
+     * need it repeated: a Connect without it succeeds, negotiates, and goes on
+     * to run pipelines. Verified against a live server. */
+    WSManConnectShell(t->session, 0, kResourceUri, shell_id_w, NULL, &data,
                       &async, &t->shell);
     if (WaitForSingleObject(op.done, t->timeout_ms) != WAIT_OBJECT_0) {
         set_error(t, "WSManConnectShell", 0, L"timed out");
@@ -785,10 +907,38 @@ psrp_result_t psrp_transport_connect(psrp_transport_t *t,
     } else {
         rc = PSRP_OK;
     }
+
+    if (rc == PSRP_OK && response_payload) {
+        /* 3.1.5.3.15: the server's SESSION_CAPABILITY is in the response's
+         * open content and nowhere else. A response without it is a failed
+         * connect as far as the spec is concerned, so it is an error here. */
+        if (!op.response_utf8) {
+            set_error(t, "WSManConnectShell", 0,
+                      L"no connectResponseXml in the response");
+            rc = PSRP_ERR_TRANSPORT;
+        } else {
+            rc = decode_connect_response(op.response_utf8, op.response_len,
+                                         response_payload);
+            if (rc != PSRP_OK)
+                set_error(t, "WSManConnectShell", 0,
+                          L"connectResponseXml could not be decoded");
+        }
+    }
+
     op_destroy(&op);
     free(connect_xml);
-    if (rc != PSRP_OK) t->shell = NULL;
-    return rc;
+    if (rc != PSRP_OK) {
+        t->shell = NULL;
+        return rc;
+    }
+
+    /* 3.1.4.10.3 step 6: a Receive follows the connect. The old code never
+     * posted one, so even traffic that did arrive on the stream had nowhere
+     * to land. */
+    reset_receive(&t->shell_rx);
+    reset_receive(&t->cmd_rx);
+    post_receive(t, &t->shell_rx, NULL);
+    return PSRP_OK;
 }
 
 bool psrp_transport_is_disconnected(const psrp_transport_t *t)

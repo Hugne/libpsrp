@@ -60,6 +60,7 @@ typedef struct {
     int64_t last_availability_count;
     int last_availability_known;
     int host_answered;           /* value-returning host calls we replied to */
+    int pool_init_data;          /* RUNSPACEPOOL_INIT_DATA replies to a connect */
     char first_error[256];
     char output_text[2048];      /* every PIPELINE_OUTPUT rendered, joined */
     char last_ss_b64[1024];      /* last SecureString output, still encrypted */
@@ -117,6 +118,7 @@ static int drain(psrp_session_t *s, psrp_transport_t *t, seen_t *seen)
         case PSRP_EVENT_INFORMATION_RECORD:   seen->information++; break;
         case PSRP_EVENT_USER_EVENT:           seen->user_event++; break;
         case PSRP_EVENT_APPLICATION_PRIVATE_DATA: seen->app_private_data++; break;
+        case PSRP_EVENT_POOL_INIT_DATA:       seen->pool_init_data++; break;
         case PSRP_EVENT_SESSION_KEY_READY:    seen->session_key_ready++; break;
         case PSRP_EVENT_PUBLIC_KEY_REQUESTED: seen->public_key_requested++; break;
         case PSRP_EVENT_RUNSPACE_AVAILABILITY:
@@ -1103,6 +1105,306 @@ done:
     return bad;
 }
 
+/* ---------------------------------- connect from a new client session ---- */
+
+static int section_connect_new(psrp_transport_t *t)
+{
+    /* 3.1.4.10.3, end to end: one client opens a pool and disconnects; a
+     * second, with a fresh transport and session, discovers the pool by
+     * enumeration, adopts its ShellId, connects, and runs a command in it.
+     * None of adopt_pool, connect_payload, transport_connect or the
+     * RUNSPACEPOOL_INIT_DATA handling had been exercised against a server.
+     *
+     * `t` plays the first client. The second is created here so its wreckage
+     * cannot be confused with the first's. */
+    psrp_session_t *s1, *s2 = NULL;
+    psrp_transport_t *t2 = NULL;
+    psrp_wsman_config_t cfg;
+    psrp_shell_info_t *shells = NULL;
+    size_t shell_count = 0, k;
+    psrp_guid_t pool_id;
+    psrp_buffer_t payload, resp;
+    seen_t seen;
+    int state, bad = 1, waited = 0;
+    bool found = false;
+
+    memset(&seen, 0, sizeof seen);
+    /* Zeroed before the first early exit, since the cleanup frees its
+     * strings unconditionally. */
+    memset(&cfg, 0, sizeof cfg);
+    psrp_buffer_init(&payload);
+    psrp_buffer_init(&resp);
+    s1 = open_pool(t, &seen);
+    if (!s1) return 1;
+    pool_id = *psrp_session_pool_id(s1);
+
+    /* First client does some work, then leaves the pool behind. */
+    state = run_script(s1, t, "'before'", &seen);
+    if (state != PSRP_INVOCATION_COMPLETED) {
+        printf("  FAIL: first client's pipeline state %d\n", state);
+        goto done;
+    }
+    if (psrp_transport_disconnect(t, 120000) != PSRP_OK ||
+        psrp_session_notify_disconnected(s1) != PSRP_OK) {
+        printf("  FAIL: disconnect: %s\n", psrp_transport_last_error(t));
+        goto done;
+    }
+
+    /* Discover it the way a stranger would: by enumeration. */
+    memset(&cfg, 0, sizeof cfg);
+    cfg.username = widen(getenv("PSRP_USER"));
+    cfg.password = widen(getenv("PSRP_PASS"));
+    cfg.operation_timeout_ms = 60000;
+    if (psrp_wsman_enumerate_shells(&cfg, &shells, &shell_count) != PSRP_OK) {
+        printf("  FAIL: enumerate\n");
+        goto done;
+    }
+    for (k = 0; k < shell_count; k++) {
+        if (psrp_guid_equal(&shells[k].shell_id, &pool_id)) {
+            found = true;
+            printf("  discovered the pool, state %s\n",
+                   shells[k].state ? shells[k].state : "<none>");
+        }
+    }
+    if (!found) {
+        printf("  FAIL: the disconnected pool was not enumerated\n");
+        goto done;
+    }
+
+    /* Second client adopts and connects. */
+    if (psrp_wsman_transport_create(&cfg, &t2) != PSRP_OK) {
+        printf("  FAIL: second transport: %s\n", psrp_transport_last_error(t2));
+        goto done;
+    }
+    s2 = psrp_session_new();
+    if (!s2 || psrp_session_adopt_pool(s2, &pool_id) != PSRP_OK) {
+        printf("  FAIL: adopt_pool\n");
+        goto done;
+    }
+    if (psrp_session_connect_payload(s2, &payload) != PSRP_OK) {
+        printf("  FAIL: connect_payload\n");
+        goto done;
+    }
+    if (psrp_transport_connect(t2, &pool_id, payload.data, payload.len, &resp)
+        != PSRP_OK) {
+        printf("  FAIL: transport_connect: %s\n", psrp_transport_last_error(t2));
+        goto done;
+    }
+
+    /* 3.1.5.3.15: the server's SESSION_CAPABILITY came back inside the
+     * ConnectResponse, so it is fed to the session by hand before anything
+     * from the stream. If the session cannot read it, show what arrived: the
+     * spec is ambiguous about whether this is fragments or bare CLIXML. */
+    printf("  connect response: %zu bytes\n", resp.len);
+    {
+        psrp_result_t rc = psrp_session_receive(s2, resp.data, resp.len);
+        if (rc != PSRP_OK) {
+            size_t i;
+            printf("  session_receive on it: %s; starts: ", psrp_strerror(rc));
+            for (i = 0; i < resp.len && i < 96; i++) {
+                unsigned char c = resp.data[i];
+                putchar((c >= 32 && c < 127) ? c : '.');
+            }
+            printf("\n");
+        }
+    }
+
+    /* 3.1.4.10.3 steps 5 and 6: the capability reply takes the pool to
+     * Opened; step 8, the private data follows. */
+    memset(&seen, 0, sizeof seen);
+    while (psrp_session_pool_state(s2) != PSRP_RUNSPACE_OPENED && waited < 30000) {
+        psrp_buffer_t chunk;
+        (void)drain(s2, t2, &seen);
+        if (psrp_session_pool_state(s2) == PSRP_RUNSPACE_OPENED) break;
+        psrp_buffer_init(&chunk);
+        if (psrp_transport_receive(t2, &chunk, 250) == PSRP_OK && chunk.len)
+            (void)psrp_session_receive(s2, chunk.data, chunk.len);
+        psrp_buffer_free(&chunk);
+        waited += 250;
+    }
+    printf("  second client pool state: %s\n",
+           psrp_runspace_pool_state_name(psrp_session_pool_state(s2)));
+    if (psrp_session_pool_state(s2) != PSRP_RUNSPACE_OPENED) {
+        printf("  FAIL: connected pool never reached Opened\n");
+        goto done;
+    }
+
+    /* The proof: the adopted pool runs a command for its new owner. */
+    state = run_script(s2, t2, "'after'", &seen);
+    printf("  second client ran a pipeline: state=%d text=%s\n", state,
+           seen.output_text);
+    /* If that produced nothing, say what did arrive and what the transport
+     * thinks, since the pump above swallows transport errors as silence. */
+    printf("  init_data=%d app_data=%d transport: %s\n", seen.pool_init_data,
+           seen.app_private_data, psrp_transport_last_error(t2));
+    if (seen.first_error[0]) printf("  error record: %s\n", seen.first_error);
+    if (state != PSRP_INVOCATION_COMPLETED || !strstr(seen.output_text, "after")) {
+        printf("  FAIL: adopted pool did not run the command\n");
+        goto done;
+    }
+    bad = 0;
+
+done:
+    psrp_shell_info_free_all(shells, shell_count);
+    if (t2) (void)psrp_transport_close_shell(t2);
+    psrp_session_free(s2);
+    psrp_transport_free(t2);
+    /* The first client's shell now belongs to the second and is already
+     * closed; freeing its session must tolerate that. */
+    psrp_session_free(s1);
+    psrp_buffer_free(&payload);
+    psrp_buffer_free(&resp);
+    free((void *)cfg.username);
+    free((void *)cfg.password);
+    return bad;
+}
+
+/* --------------------------------- disconnect with a pipeline running ---- */
+
+static int section_disconnect_running(psrp_transport_t *t)
+{
+    /* The point of disconnect is that the pipeline keeps running while nobody
+     * is attached. So: start something slow, disconnect before it finishes,
+     * wait past its finish, reconnect, and collect the output it produced
+     * while we were away. The live test only ever disconnected an idle pool. */
+    static const char kScript[] = "Start-Sleep -Seconds 3; 'late'";
+    psrp_session_t *s;
+    psrp_command_t *cmd;
+    psrp_buffer_t payload;
+    psrp_guid_t pid;
+    seen_t seen;
+    int state = -1, bad = 1;
+
+    memset(&seen, 0, sizeof seen);
+    s = open_pool(t, &seen);
+    if (!s) return 1;
+
+    cmd = psrp_command_new(kScript, true);
+    psrp_buffer_init(&payload);
+    if (!cmd ||
+        psrp_session_pipeline_payload(s, &cmd, 1, PSRP_PIPELINE_NO_INPUT,
+                                      &pid, &payload) != PSRP_OK ||
+        psrp_transport_run_command(t, &pid, payload.data, payload.len)
+            != PSRP_OK) {
+        printf("  FAIL: start: %s\n", psrp_transport_last_error(t));
+        goto done;
+    }
+
+    if (psrp_transport_disconnect(t, 120000) != PSRP_OK ||
+        psrp_session_notify_disconnected(s) != PSRP_OK) {
+        printf("  FAIL: disconnect: %s\n", psrp_transport_last_error(t));
+        goto done;
+    }
+    printf("  disconnected with the pipeline running\n");
+    Sleep(4500);                        /* let it finish unobserved */
+
+    if (psrp_transport_reconnect(t) != PSRP_OK ||
+        psrp_session_notify_reconnected(s) != PSRP_OK) {
+        printf("  FAIL: reconnect: %s\n", psrp_transport_last_error(t));
+        goto done;
+    }
+    do {
+        state = pump(s, t, &seen, 30000);
+    } while (state >= 0 && !psrp_invocation_state_is_terminal(state));
+
+    printf("  after reconnect: state=%d text=%s\n", state, seen.output_text);
+    if (state != PSRP_INVOCATION_COMPLETED || !strstr(seen.output_text, "late")) {
+        printf("  FAIL: output produced while disconnected was lost\n");
+        goto done;
+    }
+    bad = 0;
+
+done:
+    psrp_buffer_free(&payload);
+    psrp_command_free(cmd);
+    (void)psrp_transport_close_shell(t);
+    psrp_session_free(s);
+    return bad;
+}
+
+/* ------------------------------------------------------- PSCredential ---- */
+
+static int section_credential(psrp_transport_t *t)
+{
+    /* 2.2.3.25 to the server: a credential whose password rides as a
+     * SecureString under the negotiated key. The script unwraps both halves,
+     * so what comes back is exactly what we sent. */
+    static const char kScript[] =
+        "param($c) \"$($c.UserName):$($c.GetNetworkCredential().Password)\"";
+    psrp_session_t *s;
+    psrp_command_t *cmd = NULL;
+    psrp_buffer_t payload;
+    psrp_guid_t pid;
+    psrp_value_t ss, cred;
+    seen_t seen;
+    int state = -1, bad = 1, waited = 0;
+
+    memset(&seen, 0, sizeof seen);
+    psrp_value_init(&ss);
+    psrp_value_init(&cred);
+    psrp_buffer_init(&payload);
+    s = open_pool(t, &seen);
+    if (!s) return 1;
+
+    if (psrp_session_start_key_exchange(s) != PSRP_OK) goto done;
+    flush_out(s, t);
+    while (!psrp_session_has_session_key(s) && waited < 30000) {
+        psrp_buffer_t chunk;
+        (void)drain(s, t, &seen);
+        if (psrp_session_has_session_key(s)) break;
+        psrp_buffer_init(&chunk);
+        if (psrp_transport_receive(t, &chunk, 250) == PSRP_OK && chunk.len)
+            (void)psrp_session_receive(s, chunk.data, chunk.len);
+        psrp_buffer_free(&chunk);
+        waited += 250;
+    }
+    if (!psrp_session_has_session_key(s)) {
+        printf("  FAIL: no session key\n");
+        goto done;
+    }
+
+    if (psrp_crypto_protect_string(psrp_session_crypto(s), "hunter2", 7, &ss)
+        != PSRP_OK) {
+        printf("  FAIL: protect\n");
+        goto done;
+    }
+    if (psrp_host_make_credential("alice", ss.as.text.ptr, &cred) != PSRP_OK) {
+        printf("  FAIL: make_credential\n");
+        goto done;
+    }
+
+    cmd = psrp_command_new(kScript, true);
+    if (!cmd || psrp_command_add_parameter(cmd, "c", &cred) != PSRP_OK) goto done;
+    if (psrp_session_pipeline_payload(s, &cmd, 1, PSRP_PIPELINE_NO_INPUT,
+                                      &pid, &payload) != PSRP_OK ||
+        psrp_transport_run_command(t, &pid, payload.data, payload.len)
+            != PSRP_OK) {
+        printf("  FAIL: run: %s\n", psrp_transport_last_error(t));
+        goto done;
+    }
+    do {
+        state = pump(s, t, &seen, 60000);
+    } while (state >= 0 && !psrp_invocation_state_is_terminal(state));
+
+    printf("  state=%d text=%s\n", state, seen.output_text);
+    if (seen.first_error[0]) printf("  error record: %s\n", seen.first_error);
+    if (state != PSRP_INVOCATION_COMPLETED ||
+        !strstr(seen.output_text, "alice:hunter2")) {
+        printf("  FAIL: the credential did not survive the trip\n");
+        goto done;
+    }
+    bad = 0;
+
+done:
+    psrp_value_free(&ss);
+    psrp_value_free(&cred);
+    psrp_buffer_free(&payload);
+    psrp_command_free(cmd);
+    (void)psrp_transport_close_shell(t);
+    psrp_session_free(s);
+    return bad;
+}
+
 /* ------------------------------------------------------------------ main -- */
 
 typedef int (*section_fn)(psrp_transport_t *);
@@ -1121,6 +1423,9 @@ static const struct { const char *name; section_fn fn; } kSections[] = {
     { "appdata",   section_appdata },
     { "reset",     section_reset },
     { "poolafter", section_poolafter },
+    { "connect_new", section_connect_new },
+    { "disconnect_running", section_disconnect_running },
+    { "credential", section_credential },
 };
 #define SECTION_COUNT (sizeof kSections / sizeof kSections[0])
 

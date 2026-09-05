@@ -37,7 +37,7 @@ The two entries left beyond those exist only to support a non-Windows port.
 | Public header self-containment | done | done | one generated TU per header, in C and C++; a build-time check, verified to fail on a broken header |
 | Fresh-clone build | done | done | clone builds and tests green on both toolchains, with live interop and stress; nothing depends on an untracked file |
 | Live pipeline input | done | done | `tests/interop/test_input.c`; the input direction had never been run against a real server |
-| Live feature coverage | done | done | `tests/interop/test_features.c`, 13 sections: streams, runspace controls, host calls both ways, key exchange and SecureString both ways, command metadata with namespaces, stop, multi-command pipelines with typed parameters, user events, application private data, reset, and pool-level traffic after a pipeline |
+| Live feature coverage | done | done | `tests/interop/test_features.c`, 16 sections: streams, runspace controls, host calls both ways, key exchange and SecureString both ways, command metadata with namespaces, stop, multi-command pipelines with typed parameters, user events, application private data, reset, pool-level traffic after a pipeline, connecting from a new client session, disconnecting with a pipeline running, and PSCredential |
 | Worked example | done | done | `examples/run_command.c`, verified against a live server |
 | Differential testing vs psrpcore | done | done | both directions, 39 cases; corpus committed so ctest stays hermetic |
 
@@ -119,7 +119,7 @@ The two entries left beyond those exist only to support a non-Windows port.
 | 2.2.3.22 | CommandMetadata | done | done | parse name, namespace, help uri, type, parameter names |
 | 2.2.3.23 | ParameterMetadata | done | done | type, aliases, switch and dynamic flags, index-aligned with the names |
 | 2.2.3.24 | ArgumentList | done | done | optional on GET_COMMAND_METADATA; must be a list |
-| 2.2.3.25 | PSCredential | done | done | adapted properties, required type names, SecureString password |
+| 2.2.3.25 | PSCredential | done | done | adapted properties, required type names, SecureString password; live-verified round trip |
 | 2.2.3.26 | KeyInfo | done | done | extended properties; build + read |
 | 2.2.3.27 | ControlKeyStates | done | done | all nine bit flags |
 | 2.2.3.28 | BufferCell | done | done | adapted properties; colours are Color wrappers |
@@ -236,11 +236,11 @@ The two entries left beyond those exist only to support a non-Windows port.
 | 3.1.4.6 | Setting the Minimum or Maximum Runspaces in a RunspacePool | done | done | builders + availability response |
 | 3.1.4.7 | Getting the Number of Available Runspaces in a RunspacePool | done | done | builder + availability response |
 | 3.1.4.8 | Initiating a Session Key Exchange | done | done | public key export + encrypted session key import |
-| 3.1.4.9 | Disconnecting from a RunspacePool | done | done | pool and pipelines to Disconnected; live-verified |
+| 3.1.4.9 | Disconnecting from a RunspacePool | done | done | pool and pipelines to Disconnected; live-verified, including with a pipeline running |
 | 3.1.4.10 | Connecting to a RunspacePool | done | done | both the previous-session and new-session paths |
 | 3.1.4.10.1 | Discovering Disconnected RunspacePools and Associated Pipelines on a Server | done | done | wxf:Enumerate over the shell URI, via the WSMan automation interface; reusable handle avoids a platform handle leak (TODO PSRP-14) |
 | 3.1.4.10.2 | Connecting to a RunspacePool from a Previous Client Session | done | done | reconnect; live-verified |
-| 3.1.4.10.3 | Connecting to a RunspacePool from a New Client Session | done | done | connect payload and wxf:Connect; discovery is TODO PSRP-12 |
+| 3.1.4.10.3 | Connecting to a RunspacePool from a New Client Session | done | done | live-verified end to end: enumerate, adopt, connect, negotiate to Opened, run a pipeline (TODO PSRP-23..25) |
 | 3.1.5 | Message Processing Events and Sequencing Rules | done | done | send/receive rules, WSMan binding, and sequencing verified live |
 | 3.1.5.1 | General Rules | done | done | a Closed or Broken pool ignores everything aimed at it |
 | 3.1.5.1.1 | Rules for Sending Data | done | done | message framing + fragmentation on send |
@@ -260,11 +260,11 @@ The two entries left beyond those exist only to support a non-Windows port.
 | 3.1.5.3.11 | Rules for the wxf:Delete Message | done | done | explicit shell close, verified live |
 | 3.1.5.3.12 | Rules for the wxf:DeleteResponse Message | done | done | completion handled by the WSMan client |
 | 3.1.5.3.13 | Rules for the wxf:Fault Message | done | done | surfaced as a Broken pool with the fault text |
-| 3.1.5.3.14 | Rules for the wxf:Connect Message | done | done | WSManConnectShell with the payload as open content |
-| 3.1.5.3.15 | Rules for the wxf:ConnectResponse Message | done | done | completion drives the session state |
+| 3.1.5.3.14 | Rules for the wxf:Connect Message | done | done | WSManConnectShell, payload in <connectXml>, upper-case ShellId, no OptionSet; live-verified |
+| 3.1.5.3.15 | Rules for the wxf:ConnectResponse Message | done | done | SESSION_CAPABILITY taken from <connectResponseXml> (PSRP fragments); live-verified |
 | 3.1.5.3.16 | Rules for the wxf:Disconnect Message | done | done | WSManDisconnectShell with an idle timeout |
 | 3.1.5.3.17 | Rules for the wxf:DisconnectResponse Message | done | done | completion drives the session state |
-| 3.1.5.3.18 | Rules for the wxf:Reconnect Message | done | done | WSManReconnectShell; the receive re-arms |
+| 3.1.5.3.18 | Rules for the wxf:Reconnect Message | done | done | WSManReconnectShell then WSManReconnectShellCommand; output produced while detached is delivered (PSRP-26) |
 | 3.1.5.3.19 | Rules for the wxf:ReconnectResponse Message | done | done | completion drives the session state |
 | 3.1.5.4 | Rules for Processing PSRP Messages | done | done | state preconditions enforced on send and receive |
 | 3.1.5.4.1 | SESSION_CAPABILITY Message | done | done |  |
@@ -297,8 +297,8 @@ The two entries left beyond those exist only to support a non-Windows port.
 | 3.1.5.4.26 | INFORMATION_RECORD Message | done | done | surfaced as an event |
 | 3.1.5.4.27 | PIPELINE_HOST_CALL Message | done | done | live-verified; ci and method id surfaced with the parameters |
 | 3.1.5.4.28 | PIPELINE_HOST_RESPONSE Message | done | done | quotes the call's ci; goes out on the pr stream; live-verified with ReadLine |
-| 3.1.5.4.29 | CONNECT_RUNSPACEPOOL Message | done | done | sent once, with SESSION_CAPABILITY, from Connecting |
-| 3.1.5.4.30 | RUNSPACEPOOL_INIT_DATA Message | done | done | surfaced with the server's actual bounds |
+| 3.1.5.4.29 | CONNECT_RUNSPACEPOOL Message | done | done | sent once, with SESSION_CAPABILITY, from Connecting; live-verified |
+| 3.1.5.4.30 | RUNSPACEPOOL_INIT_DATA Message | done | done | surfaced with the server's actual bounds; live-verified |
 | 3.1.5.4.31 | RESET_RUNSPACE_STATE Message | done | done | requires Opened; allocates a call identifier; live-verified, answered even by a 2.2 server |
 | 3.1.6 | Timer Events | done | done | expiry breaks the pool and raises an event |
 | 3.1.7 | Other Local Events | done | done | an error breaks the pool, or fails just its pipeline |

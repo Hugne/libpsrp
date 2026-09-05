@@ -1455,6 +1455,47 @@ PSRP_TEST(connect_payload_carries_capability_and_connect)
     psrp_session_free(s);
 }
 
+PSRP_TEST(connect_flow_reaches_opened_on_the_capability_reply)
+{
+    /* 3.1.4.10.3 step 6: after a Connect, the client moves itself to Opened
+     * when SESSION_CAPABILITY arrives. The server sends no RUNSPACEPOOL_STATE
+     * for a connect, so treating this like an open left the pool waiting in
+     * NegotiationSucceeded forever. Found by actually connecting to a live
+     * pool; no earlier test had. */
+    psrp_session_t *s = psrp_session_new();
+    psrp_guid_t adopted;
+    psrp_buffer_t wire;
+    psrp_event_t e;
+
+    ASSERT_NOT_NULL(s);
+    ASSERT_OK(psrp_guid_generate(&adopted));
+    ASSERT_OK(psrp_session_adopt_pool(s, &adopted));
+    psrp_buffer_init(&wire);
+    ASSERT_OK(psrp_session_connect_payload(s, &wire));
+    ASSERT_EQ_I(psrp_session_pool_state(s), PSRP_RUNSPACE_NEGOTIATION_SENT);
+
+    server_send(s, PSRP_MSG_SESSION_CAPABILITY, NULL, kCapabilityXml, 0);
+    expect_event(s, PSRP_EVENT_SESSION_CAPABILITY, &e);
+    ASSERT_EQ_I(e.state, PSRP_RUNSPACE_OPENED);
+    psrp_event_free(&e);
+    ASSERT_EQ_I(psrp_session_pool_state(s), PSRP_RUNSPACE_OPENED);
+
+    /* And an ordinary open still stops at NegotiationSucceeded, waiting for
+     * the RUNSPACEPOOL_STATE that the create flow does send. */
+    psrp_buffer_free(&wire);
+    psrp_session_free(s);
+    s = psrp_session_new();
+    ASSERT_NOT_NULL(s);
+    psrp_buffer_init(&wire);
+    ASSERT_OK(psrp_session_open_payload(s, &wire));
+    server_send(s, PSRP_MSG_SESSION_CAPABILITY, NULL, kCapabilityXml, 0);
+    expect_event(s, PSRP_EVENT_SESSION_CAPABILITY, &e);
+    ASSERT_EQ_I(e.state, PSRP_RUNSPACE_NEGOTIATION_SUCCEEDED);
+    psrp_event_free(&e);
+    psrp_buffer_free(&wire);
+    psrp_session_free(s);
+}
+
 PSRP_TEST(adopting_a_pool_is_only_valid_before_opening)
 {
     psrp_session_t *s = psrp_session_new();
@@ -1634,6 +1675,7 @@ static const psrp_test_case_t cases[] = {
     PSRP_TEST_CASE(reconnect_requires_a_disconnected_pool),
     PSRP_TEST_CASE(a_fault_breaks_the_pool),
     PSRP_TEST_CASE(connect_payload_carries_capability_and_connect),
+    PSRP_TEST_CASE(connect_flow_reaches_opened_on_the_capability_reply),
     PSRP_TEST_CASE(adopting_a_pool_is_only_valid_before_opening),
     PSRP_TEST_CASE(pool_init_data_reports_the_servers_bounds),
     PSRP_TEST_CASE(a_broken_pool_processes_nothing),

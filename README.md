@@ -45,7 +45,7 @@ passed every unit test while being impossible to use. So every feature is also
 driven against a live PowerShell:
 
 ```
-PSRP_INTEROP=1 PSRP_USER=... PSRP_PASS=... test_features   # all 13 sections
+PSRP_INTEROP=1 PSRP_USER=... PSRP_PASS=... test_features   # all 16 sections
 test_features hostread                                       # just one
 ```
 
