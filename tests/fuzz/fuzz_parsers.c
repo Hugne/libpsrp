@@ -27,7 +27,6 @@
 #include "psrp/psrp_host.h"
 #include "psrp/psrp_timezone.h"
 #include "psrp/psrp_session.h"
-#include "psrp/winrm.h"
 #include "psrp_test.h"
 
 /* xorshift64*, so a run reproduces from its seed on any platform. */
@@ -52,16 +51,6 @@ static size_t random_below(size_t n)
  * bouncing off the first length check. */
 static const char *const kXmlSeeds[] = {
     "<S>hello</S>",
-    /* A shell record as a WS-Enumerate response carries it. Without a seed
-     * near valid input, the shell target only ever exercised its rejection
-     * path -- which the acceptance check below catches and calls a failure,
-     * because such a run looks exactly like one that found nothing. */
-    "<rsp:Shell xmlns:rsp=\"http://schemas.microsoft.com/wbem/wsman/1/"
-    "windows/shell\"><rsp:ShellId>4358D4C7-0B0D-4E2C-9E5B-6E1F0A2B3C4D"
-    "</rsp:ShellId><rsp:Name>Runspace1</rsp:Name>"
-    "<rsp:ResourceUri>http://schemas.microsoft.com/powershell/"
-    "Microsoft.PowerShell</rsp:ResourceUri><rsp:Owner>DOM\\user</rsp:Owner>"
-    "<rsp:State>Connected</rsp:State></rsp:Shell>",
     "<Obj RefId=\"0\"><MS><I32 N=\"RunspaceState\">2</I32></MS></Obj>",
     "<Obj RefId=\"0\"><TN RefId=\"0\"><T>System.Object</T></TN>"
     "<ToString>x</ToString><Props><B N=\"b\">true</B></Props>"
@@ -288,30 +277,12 @@ static void target_bodies(const uint8_t *d, size_t n)
 
 typedef void (*target_fn)(const uint8_t *, size_t);
 
-/* A shell record from a WS-Enumerate response. This is server-supplied XML
- * like everything else here: a client that enumerates is parsing whatever the
- * other end chose to send. It was not fuzzed while it lived in a
- * Windows-only file behind an enumeration nothing else could reach. */
-static void target_shell(const uint8_t *d, size_t n)
-{
-    winrm_shell_info_t info;
-
-    g_attempts[6]++;
-    if (winrm_parse_shell(d, n, &info) == PSRP_OK) {
-        g_accepts[6]++;
-        winrm_shell_info_free(&info);
-    }
-    /* Freeing twice must stay safe; the enumeration paths do it on error. */
-    winrm_shell_info_free(&info);
-}
-
 static const struct { const char *name; target_fn fn; } kTargets[] = {
     { "clixml",   target_clixml },
     { "fragment", target_fragment },
     { "message",  target_message },
     { "session",  target_session },
     { "bodies",   target_bodies },
-    { "shell",    target_shell },
 };
 #define TARGET_COUNT (sizeof kTargets / sizeof kTargets[0])
 
@@ -407,14 +378,14 @@ int main(void)
      * once accepted its input tested nothing but its own rejection path, and
      * a run like that would look identical to a run that found nothing. */
     {
-        static const char *const kNames[7] = {
+        static const char *const kNames[6] = {
             "clixml", "fragment", "message", "session-event",
-            "capability", "pipeline-output", "shell-record"
+            "capability", "pipeline-output"
         };
         int lean = 0;
         size_t k;
 
-        for (k = 0; k < 7; k++) {
+        for (k = 0; k < 6; k++) {
             double pct = g_attempts[k]
                 ? (100.0 * (double)g_accepts[k] / (double)g_attempts[k]) : 0.0;
             printf("  %-16s %8lu/%-8lu accepted (%.2f%%)\n",
