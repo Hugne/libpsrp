@@ -2,9 +2,7 @@ name: ci
 
 on:
   push:
-    # wip/static-ci is here so the runner can judge the static-link steps
-    # without master carrying the risk; it comes out before the merge.
-    branches: [master, wip/static-ci]
+    branches: [master]
   pull_request:
   workflow_dispatch:
 
