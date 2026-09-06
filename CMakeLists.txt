@@ -122,12 +122,18 @@ else()
   # for static would quietly get dynamic. A path cannot be misread.
   #
   # An archive also records none of its own dependencies, so what the shared
-  # build picks up transitively has to be named here: libm for libxml2's
-  # schema types (floor, trunc), and zlib and zstd for the compression both
-  # libraries can use.
+  # build picks up transitively has to be named here. Which libraries those
+  # are is NOT fixed: it depends on how the distribution built libxml2, and
+  # guessing produced a link that worked on one machine and failed on another
+  # with undefined lzma_* symbols. The .pc file records the truth for whatever
+  # is actually installed -- Ubuntu 24.04 says "-lz -llzma -lm" and 26.04 says
+  # "-lm" -- so take the list from there. libm is named anyway, since libxml2's
+  # schema types want floor and trunc and a duplicate costs nothing.
   if(PSRP_STATIC_LIBXML2)
     find_library(LIBXML2_ARCHIVE NAMES libxml2.a REQUIRED)
-    target_link_libraries(psrp PUBLIC ${LIBXML2_ARCHIVE} m z)
+    set(PSRP_LIBXML2_DEPS ${LIBXML2_STATIC_LIBRARIES})
+    list(REMOVE_ITEM PSRP_LIBXML2_DEPS xml2)
+    target_link_libraries(psrp PUBLIC ${LIBXML2_ARCHIVE} ${PSRP_LIBXML2_DEPS} m)
     target_include_directories(psrp SYSTEM PRIVATE ${LIBXML2_INCLUDE_DIRS})
   else()
     target_link_libraries(psrp PUBLIC PkgConfig::LIBXML2)
