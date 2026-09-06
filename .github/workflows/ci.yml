@@ -92,9 +92,16 @@ jobs:
       - name: Test
         run: ctest --test-dir build/linux --output-on-failure
 
+      # A static libxml2 needs the link-time pieces of its OWN private
+      # dependencies, and libxml2-dev does not pull them in: it Depends on
+      # libxml2 and nothing else. This machine had them by accident, from
+      # other packages, which is why the step passed here and failed on a
+      # runner that does not.
+      - name: Dependencies a static libxml2 needs
+        run: sudo apt-get install -y zlib1g-dev liblzma-dev
+
       # The static-link options are documented, so they are built rather than
-      # left to rot until someone tries one. Only libxml2 can actually be
-      # linked statically on Ubuntu; see the next step for the other.
+      # left to rot until someone tries one.
       - name: Build with PSRP_STATIC_LIBXML2
         run: |
           cmake -G Ninja -S . -B build/staticxml -DPSRP_STATIC_LIBXML2=ON
