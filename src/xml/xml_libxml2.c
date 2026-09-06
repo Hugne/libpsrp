@@ -107,6 +107,21 @@ static bool is_blank(const char *s)
     return true;
 }
 
+/* libxml2 prints to stderr when no handler is installed. This one exists to
+ * make sure one always is; the caller is told about malformed input through
+ * the return code.
+ *
+ * Deliberately the READER's error handler rather than the structured one:
+ * xmlStructuredErrorFunc takes xmlErrorPtr on libxml2 2.9 and const xmlError*
+ * from 2.12, so a callback written for either fails to compile against the
+ * other under -Werror. This signature has not changed. */
+static void swallow_error(void *arg, const char *msg,
+                          xmlParserSeverities severity,
+                          xmlTextReaderLocatorPtr locator)
+{
+    (void)arg; (void)msg; (void)severity; (void)locator;
+}
+
 psrp_result_t psrp_xml_reader_create(const void *utf8, size_t n,
                                      psrp_xml_reader_t **out)
 {
@@ -134,6 +149,19 @@ psrp_result_t psrp_xml_reader_create(const void *utf8, size_t n,
                               XML_PARSE_NONET | XML_PARSE_NOERROR |
                               XML_PARSE_NOWARNING);
     if (!r->r) { free(r); return PSRP_ERR_XML; }
+
+    /* The flags above are not enough on their own, which took a fuzz target
+     * feeding NUL bytes on an older libxml2 to show: an ENCODING error is
+     * reported through the error handler rather than as a parse diagnostic,
+     * so NOERROR does not cover it and "input conversion failed due to input
+     * error, bytes 0x00 0x00 0x00 0x00" lands on the caller's stderr anyway.
+     *
+     * Silencing the handler covers every diagnostic libxml2 has, present and
+     * future, rather than the subset a flag happens to name. It is set on
+     * this reader rather than globally: xmlSetGenericErrorFunc would replace
+     * whatever the embedding application installed, and a library has no
+     * business doing that to its host. */
+    xmlTextReaderSetErrorHandler(r->r, swallow_error, NULL);
 
     *out = r;
     return PSRP_OK;
