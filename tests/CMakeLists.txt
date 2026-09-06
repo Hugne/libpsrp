@@ -43,11 +43,9 @@ psrp_add_unit_test(test_invocation unit/test_invocation.c)
 # reasonable-looking choice would fail to interoperate silently.
 psrp_add_unit_test(test_crypto unit/test_crypto.c)
 
-# Shell enumeration goes through the WSMan COM automation interface and has no
-# POSIX counterpart; WS-Enumerate over curl would be a separate piece of work.
-if(WIN32)
-  psrp_add_unit_test(test_enumerate unit/test_enumerate.c)
-endif()
+# The shell-record parser is the half of enumeration that has nothing to do
+# with how the XML arrived, so it is tested on both platforms.
+psrp_add_unit_test(test_enumerate unit/test_enumerate.c)
 psrp_add_unit_test(test_differential unit/test_differential.c)
 target_include_directories(test_differential PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/unit)
 

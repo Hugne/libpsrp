@@ -174,8 +174,9 @@ PSRP_TEST(a_discovery_handle_can_list_repeatedly)
      * held 1.
      *
      * Enumeration needs a live WinRM service, so this only asserts the shape
-     * when the machine has one; on a machine without, opening fails and there
-     * is nothing to check. */
+     * when the machine has one. Whether one is there shows up on the first
+     * REQUEST rather than at open: the curl client connects lazily, so
+     * opening succeeds either way and only the Windows client fails early. */
     winrm_config_t cfg;
     winrm_enumerator_t *d = NULL;
     int i;
@@ -185,6 +186,16 @@ PSRP_TEST(a_discovery_handle_can_list_repeatedly)
 
     if (winrm_enumerator_open(&cfg, &d) != PSRP_OK) return;
     ASSERT_NOT_NULL(d);
+
+    {
+        winrm_shell_info_t *probe = NULL;
+        size_t n = 0;
+        if (winrm_enumerator_shells(d, &probe, &n) != PSRP_OK) {
+            winrm_enumerator_free(d);
+            return;                      /* no service on this machine */
+        }
+        winrm_shell_info_free_all(probe, n);
+    }
 
     for (i = 0; i < 3; i++) {
         winrm_shell_info_t *list = NULL;

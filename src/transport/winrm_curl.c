@@ -1586,7 +1586,11 @@ psrp_result_t winrm_enumerator_open(const winrm_config_t *cfg,
     winrm_enumerator_t *e;
     psrp_result_t rc;
 
-    if (!out) return PSRP_ERR_INVALID_ARG;
+    /* A NULL config is rejected here even though winrm_session_open accepts
+     * one and defaults to localhost. Enumeration asks a server what it is
+     * holding, and defaulting THAT silently to the local machine answers a
+     * question the caller did not ask. The Windows client refuses it too. */
+    if (!cfg || !out) return PSRP_ERR_INVALID_ARG;
     *out = NULL;
 
     e = (winrm_enumerator_t *)calloc(1, sizeof *e);
