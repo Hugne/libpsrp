@@ -11,7 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "psrp/psrp_transport.h"
+#include "psrp/psrp_winrm.h"
 #include "psrp/psrp_fragment.h"
 #include "internal/psrp_codec.h"
 

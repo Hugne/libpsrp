@@ -9,7 +9,7 @@
 #include <string.h>
 
 #include "psrp/psrp.h"
-#include "psrp/psrp_transport.h"
+#include "psrp/psrp_winrm.h"
 #include "psrp_test.h"
 
 /* One item as WinRM returns it: namespaced, with the shell namespace bound to

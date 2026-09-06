@@ -25,7 +25,7 @@
 
 #include "psrp/psrp.h"
 #include "psrp/psrp_session.h"
-#include "psrp/psrp_transport.h"
+#include "psrp/psrp_winrm.h"
 
 /* Moves bytes from the transport into the session and drains what comes out.
  * Returns the state of the first event of `want`, or -1 if it never arrives.

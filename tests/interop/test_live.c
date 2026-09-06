@@ -14,7 +14,7 @@
 
 #include "psrp/psrp.h"
 #include "psrp/psrp_session.h"
-#include "psrp/psrp_transport.h"
+#include "psrp/psrp_winrm.h"
 #include "psrp/psrp_records.h"
 
 /* Pumps the transport into the session until `want` is seen or time runs out.

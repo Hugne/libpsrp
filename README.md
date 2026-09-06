@@ -72,6 +72,25 @@ Raising the announced version is not just a constant: protocol 2.4 (PowerShell
 7.6) deprecates the session key exchange, so the crypto path would have to
 become conditional on what was negotiated. See TODO PSRP-28.
 
+## Two headers for I/O
+
+`psrp_transport.h` is the contract the protocol needs from whatever carries
+its bytes: open a session, start a pipeline, push, pull, shut down. It knows
+nothing about how they travel, and constructing a transport is deliberately
+not part of it -- every carrier needs different things to be built.
+
+`psrp_winrm.h` is WS-Management's half: the configuration and constructor,
+the disconnect/reconnect/connect operations that only WSMan provides, and
+shell enumeration. A caller includes it to build a transport and then drives
+the result through the generic header.
+
+The split is not only tidiness. Shell enumeration exists on Windows and not
+in the curl transport, and while both lived in one header the declaration was
+visible where the definition was not -- so a Linux caller got an unresolved
+symbol at link time with nothing to explain it. Declared where it is
+implemented, the same call now fails to compile, at the call site, naming the
+function.
+
 ## Requirements
 
 To talk to a server, Windows: the transport is the Win32 WSMan client
@@ -224,7 +243,8 @@ instead; a debug MSVC run reports `(leak-checked)` when it is active.
 - `src/proto/` — fragments, message header, CLIXML, typed message bodies.
 - `src/state/` — the client state machine (no I/O).
 - `src/client/` — the convenience layer, built on the public API.
-- `src/transport/` — WSMan transport.
+- `src/transport/` — WinRM transports: a shim over the OS client on
+  Windows, and libcurl + GSS-API elsewhere.
 - `src/xml/` — XmlLite backend behind a pull-parser seam.
 - `PLAN.md`, `SPEC-COVERAGE.md`, `TODO.md` — design, per-section coverage,
   and everything deliberately deferred.

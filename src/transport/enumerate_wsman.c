@@ -25,7 +25,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "psrp/psrp_transport.h"
+#include "psrp/psrp_winrm.h"
 #include "internal/psrp_xml.h"
 
 /* From wsmandisp.idl. Declared here rather than including wsmandisp.h so this

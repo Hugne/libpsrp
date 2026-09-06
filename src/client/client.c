@@ -18,6 +18,7 @@
 #include <stdio.h>
 
 #include "psrp/psrp_client.h"
+#include "psrp/psrp_winrm.h"
 
 /* One poll of the transport. Short enough that a caller's timeout is honoured
  * with reasonable granularity, long enough not to spin. */

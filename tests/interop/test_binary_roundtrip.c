@@ -38,7 +38,7 @@
 
 #include "psrp/psrp.h"
 #include "psrp/psrp_session.h"
-#include "psrp/psrp_transport.h"
+#include "psrp/psrp_winrm.h"
 #include "psrp/psrp_records.h"
 
 /* The lab's sizes, unchanged. */

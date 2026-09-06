@@ -25,7 +25,7 @@
 
 #include "psrp/psrp.h"
 #include "psrp/psrp_session.h"
-#include "psrp/psrp_transport.h"
+#include "psrp/psrp_winrm.h"
 #include "psrp/psrp_records.h"
 #include "psrp/psrp_host.h"
 #include "psrp/psrp_metadata.h"

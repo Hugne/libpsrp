@@ -29,7 +29,7 @@
 
 #include "psrp/psrp.h"
 #include "psrp/psrp_session.h"
-#include "psrp/psrp_transport.h"
+#include "psrp/psrp_winrm.h"
 
 static DWORD handle_count(void)
 {

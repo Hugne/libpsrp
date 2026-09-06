@@ -39,7 +39,7 @@
 #define PSRP_CLIENT_H
 
 #include "psrp/psrp_session.h"
-#include "psrp/psrp_transport.h"
+#include "psrp/psrp_winrm.h"
 
 #ifdef __cplusplus
 extern "C" {

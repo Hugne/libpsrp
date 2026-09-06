@@ -17,6 +17,7 @@
 #include <string.h>
 
 #include "psrp/psrp_client.h"
+#include "psrp/psrp_winrm.h"
 
 /* Prints one stream, if it has anything in it. */
 static void print_stream(const char *label, const psrp_stream_t *st, FILE *to)

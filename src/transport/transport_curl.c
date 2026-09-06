@@ -43,7 +43,7 @@
 #include <gssapi/gssapi.h>
 #include <gssapi/gssapi_ext.h>
 
-#include "psrp/psrp_transport.h"
+#include "psrp/psrp_winrm.h"
 #include "psrp/psrp_fragment.h"
 #include "internal/psrp_codec.h"
 #include "internal/psrp_xml.h"
