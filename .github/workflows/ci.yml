@@ -2,7 +2,9 @@ name: ci
 
 on:
   push:
-    branches: [master]
+    # wip/static-ci is here so the runner can judge the static-link steps
+    # without master carrying the risk; it comes out before the merge.
+    branches: [master, wip/static-ci]
   pull_request:
   workflow_dispatch:
 
@@ -66,17 +68,16 @@ jobs:
       - run: sh scripts/check-no-local-config.sh
 
   linux:
-    name: Linux (partial port)
+    name: Linux
     runs-on: ubuntu-latest
     # The protocol core is platform-free and builds here behind the same seams
     # Windows uses, with libxml2, OpenSSL, a POSIX RNG and the curl transport.
-    # Still a subset -- disconnect, reconnect and enumeration are not ported --
-    # but it is what stops the portability claim drifting back into being
-    # aspirational, and it runs the crypto tests against the second backend.
+    # No longer a subset: every WS-Management operation is implemented here,
+    # enumeration included.
     #
     # The live leg cannot run here: a Linux runner has no WinRM server to talk
-    # to, so test_curl_open skips itself. It is verified against a real server
-    # locally instead (TODO PSRP-35).
+    # to, so the curl and Kerberos suites skip themselves. They are verified
+    # against a real server locally instead.
     steps:
       - uses: actions/checkout@v4
 
@@ -90,6 +91,33 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build/linux --output-on-failure
+
+      # The static-link options are documented, so they are built rather than
+      # left to rot until someone tries one. Only libxml2 can actually be
+      # linked statically on Ubuntu; see the next step for the other.
+      - name: Build with PSRP_STATIC_LIBXML2
+        run: |
+          cmake -G Ninja -S . -B build/staticxml -DPSRP_STATIC_LIBXML2=ON
+          cmake --build build/staticxml
+          ctest --test-dir build/staticxml --output-on-failure
+          ! ldd build/staticxml/tests/test_clixml_read | grep -q libxml2
+
+      # PSRP_STATIC_OPENSSL cannot succeed here -- Ubuntu does not package
+      # libjitterentropy.a, which a static libcrypto needs -- and the point of
+      # the check in CMakeLists is that it says so during configure instead of
+      # producing undefined jent_* symbols at link time. Assert the diagnosis,
+      # not just the failure.
+      - name: PSRP_STATIC_OPENSSL reports why it cannot work here
+        run: |
+          if cmake -G Ninja -S . -B build/staticssl -DPSRP_STATIC_OPENSSL=ON >configure.log 2>&1; then
+            echo "::error::configure unexpectedly succeeded"
+            exit 1
+          fi
+          grep -q "libjitterentropy" configure.log || {
+            echo "::error::configure failed for some other reason"
+            cat configure.log
+            exit 1
+          }
 
   valgrind:
     name: valgrind (Linux)
