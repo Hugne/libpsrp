@@ -1,9 +1,16 @@
+#ifndef _WIN32
+/* fileno, dup and dup2 are POSIX; -std=c11 hides them without this, and one
+ * case here captures stderr to prove the parsers never write to it. */
+#  define _POSIX_C_SOURCE 200809L
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "psrp/psrp.h"
 #include "psrp/psrp_clixml.h"
+#include "psrp/winrm.h"
 #include "psrp_test.h"
 
 /* Deep equality, used to prove serialize -> deserialize is lossless. */
@@ -542,6 +549,132 @@ PSRP_TEST(read_rejects_child_element_in_primitive)
     psrp_value_free(&v);
 }
 
+/* Malformed input must not put anything on the caller's stderr.
+ *
+ * A library writing to a terminal it does not own is wrong regardless, and
+ * malformed input is an ordinary outcome here -- it is what a hostile or
+ * broken server sends. XmlLite is silent; libxml2 is not unless told, and
+ * telling it has been got wrong twice. TODO PSRP-33 suppressed parse
+ * diagnostics with parser flags, and TODO PSRP-49 found that an ENCODING
+ * error takes a route those flags never covered, which surfaced as "input
+ * conversion failed due to input error, bytes 0x00 0x00 0x00 0x00" on a CI
+ * runner whose libxml2 was older than any development machine's.
+ *
+ * Both times the property was checked by something outside the suite noticing
+ * output, which only works when the version in front of you happens to emit
+ * it. This asserts the property directly, so it holds on whichever libxml2 is
+ * installed and on the XmlLite backend too.
+ *
+ * The redirection is done to the file descriptor rather than with freopen,
+ * because the descriptor can be put back exactly as it was: freopen has no
+ * portable way to reopen the original stderr, and reopening the null device
+ * instead would silence anything a later case tried to report.
+ */
+#ifdef _WIN32
+#  include <io.h>
+#  include <fcntl.h>
+#  define psrp_dup    _dup
+#  define psrp_dup2   _dup2
+#  define psrp_fileno _fileno
+#  define psrp_close  _close
+#  define psrp_open   _open
+#  define PSRP_WRONLY (_O_WRONLY | _O_CREAT | _O_TRUNC)
+#  define PSRP_MODE   (_S_IREAD | _S_IWRITE)
+#  include <sys/stat.h>
+#else
+#  include <unistd.h>
+#  include <fcntl.h>
+#  include <sys/stat.h>
+#  define psrp_dup    dup
+#  define psrp_dup2   dup2
+#  define psrp_fileno fileno
+#  define psrp_close  close
+#  define psrp_open   open
+#  define PSRP_WRONLY (O_WRONLY | O_CREAT | O_TRUNC)
+#  define PSRP_MODE   0600
+#endif
+
+static void feed_the_parsers(void)
+{
+    /* Shapes that reach different layers: a NUL run is an encoding error, a
+     * bad declaration is a decoding one, the rest are plain parse failures.
+     * Every one of them must be silent. */
+    static const struct { const char *data; size_t len; } kBad[] = {
+        { "<S>\x01\x02\x03\x04</S>", 12 },
+        { "<?xml version=\"1.0\" encoding=\"utf-8\"?><S>\xff\xfe\xfd</S>", 51 },
+        { "<?xml version=\"1.0\" encoding=\"no-such-encoding\"?><S>x</S>", 56 },
+        { "<S>unclosed", 11 },
+        { "<S></B>", 7 },
+        { "not xml at all", 14 },
+        { "<<<<", 4 },
+        { "", 0 },
+        { "<Obj RefId=\"0\"><MS><I32 N=\"x\">notanumber</I32></MS></Obj>", 57 },
+    };
+    /* A NUL run cannot go in the table above, since the initialiser would
+     * measure it wrong; it is the case that caused PSRP-49, so it is here. */
+    static const char kNuls[] = { '<', 'S', '>', 0, 0, 0, 0, '<', '/', 'S', '>' };
+    size_t i;
+
+    for (i = 0; i <= sizeof kBad / sizeof kBad[0]; i++) {
+        const char *data = i < sizeof kBad / sizeof kBad[0]
+                         ? kBad[i].data : kNuls;
+        size_t len = i < sizeof kBad / sizeof kBad[0]
+                   ? kBad[i].len : sizeof kNuls;
+        psrp_value_t v;
+        winrm_shell_info_t info;
+
+        psrp_value_init(&v);
+        (void)psrp_clixml_deserialize(data, len, &v);
+        psrp_value_free(&v);
+
+        /* The enumeration parser reads server XML through the same seam. */
+        if (winrm_parse_shell(data, len, &info) == PSRP_OK)
+            winrm_shell_info_free(&info);
+    }
+}
+
+PSRP_TEST(malformed_input_is_parsed_silently)
+{
+    static const char *const kPath = "stderr-capture.tmp";
+    int saved, captured;
+    long produced;
+    FILE *f;
+
+    fflush(stderr);
+    saved = psrp_dup(psrp_fileno(stderr));
+    captured = psrp_open(kPath, PSRP_WRONLY, PSRP_MODE);
+    if (saved < 0 || captured < 0) {
+        if (saved >= 0) psrp_close(saved);
+        if (captured >= 0) psrp_close(captured);
+        printf("  (cannot redirect stderr here; skipping)\n");
+        return;
+    }
+    psrp_dup2(captured, psrp_fileno(stderr));
+
+    feed_the_parsers();
+
+    fflush(stderr);
+    psrp_dup2(saved, psrp_fileno(stderr));
+    psrp_close(captured);
+    psrp_close(saved);
+
+    f = fopen(kPath, "rb");
+    produced = 0;
+    if (f) {
+        char buf[256];
+        fseek(f, 0, SEEK_END);
+        produced = ftell(f);
+        if (produced > 0) {
+            printf("  the parser wrote %ld byte(s) to stderr:\n", produced);
+            rewind(f);
+            while (fgets(buf, sizeof buf, f)) printf("    %s", buf);
+        }
+        fclose(f);
+    }
+    remove(kPath);
+    ASSERT_TRUE(produced == 0);
+}
+
 PSRP_TEST(read_rejects_null_args)
 {
     ASSERT_ERR(psrp_clixml_deserialize("<Nil />", 7, NULL),
@@ -569,6 +702,7 @@ static const psrp_test_case_t cases[] = {
     PSRP_TEST_CASE(read_rejects_unknown_element),
     PSRP_TEST_CASE(read_rejects_child_element_in_primitive),
     PSRP_TEST_CASE(read_rejects_null_args),
+    PSRP_TEST_CASE(malformed_input_is_parsed_silently),
 };
 
 PSRP_TEST_MAIN(cases)
