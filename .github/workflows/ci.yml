@@ -102,22 +102,32 @@ jobs:
           ctest --test-dir build/staticxml --output-on-failure
           ! ldd build/staticxml/tests/test_clixml_read | grep -q libxml2
 
-      # PSRP_STATIC_OPENSSL cannot succeed here -- Ubuntu does not package
-      # libjitterentropy.a, which a static libcrypto needs -- and the point of
-      # the check in CMakeLists is that it says so during configure instead of
-      # producing undefined jent_* symbols at link time. Assert the diagnosis,
-      # not just the failure.
-      - name: PSRP_STATIC_OPENSSL reports why it cannot work here
+      # PSRP_STATIC_OPENSSL may or may not be possible on a given runner, and
+      # BOTH answers are correct: whether libcrypto.a links depends on how
+      # OpenSSL was built, not on the distribution. Ubuntu 24.04's OpenSSL 3.0
+      # has no jent_ references and links; 26.04's 3.5 is built against
+      # jitterentropy, which is not packaged as an archive, and cannot.
+      #
+      # An earlier version of this step asserted the failure, having been
+      # written on a machine where it fails, and broke the moment it ran
+      # somewhere it does not. So: if it configures, it must build and pass;
+      # if it does not, the refusal must be OUR diagnosis rather than some
+      # unrelated breakage.
+      - name: PSRP_STATIC_OPENSSL either works or explains itself
         run: |
           if cmake -G Ninja -S . -B build/staticssl -DPSRP_STATIC_OPENSSL=ON >configure.log 2>&1; then
-            echo "::error::configure unexpectedly succeeded"
-            exit 1
+            echo "static libcrypto links on this runner; building it"
+            cmake --build build/staticssl
+            ctest --test-dir build/staticssl --output-on-failure
+            ! ldd build/staticssl/tests/test_clixml_read | grep -q libcrypto
+          else
+            echo "static libcrypto cannot link here; checking we said why"
+            grep -q "PSRP_STATIC_OPENSSL=ON but" configure.log || {
+              echo "::error::configure failed for some reason of its own"
+              cat configure.log
+              exit 1
+            }
           fi
-          grep -q "libjitterentropy" configure.log || {
-            echo "::error::configure failed for some other reason"
-            cat configure.log
-            exit 1
-          }
 
   valgrind:
     name: valgrind (Linux)
