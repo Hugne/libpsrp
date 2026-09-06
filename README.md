@@ -33,6 +33,12 @@ Authentication is NTLM, Kerberos or SPNEGO. On Linux, Kerberos works from a
 ticket cache with no password in the process; message encryption is on for
 every request on both platforms.
 
+HTTP and HTTPS endpoints both work, and message encryption is applied over
+either — WinRM accepts it over TLS as well. There is no API for configuring
+TLS trust, though: certificates are verified against the system store, so a
+server using a self-signed certificate needs that certificate installed there.
+See TODO PSRP-47.
+
 ## Servers
 
 The client announces protocol version 2.2, PSVersion 2.0 and serialization
