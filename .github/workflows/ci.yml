@@ -58,16 +58,20 @@ jobs:
   linux:
     name: Linux (partial port)
     runs-on: ubuntu-latest
-    # The protocol core is platform-free and builds here with libxml2, OpenSSL
-    # and a POSIX RNG behind the same seams Windows uses. The transport is not
-    # ported, so this is deliberately a subset -- but it is the thing that
-    # stops the portability claim drifting back into being aspirational, and
-    # it runs the crypto tests against the second backend.
+    # The protocol core is platform-free and builds here behind the same seams
+    # Windows uses, with libxml2, OpenSSL, a POSIX RNG and the curl transport.
+    # Still a subset -- the transport cannot run a pipeline yet -- but it is
+    # what stops the portability claim drifting back into being aspirational,
+    # and it runs the crypto tests against the second backend.
+    #
+    # The live leg cannot run here: a Linux runner has no WinRM server to talk
+    # to, so test_curl_open skips itself. It is verified against a real server
+    # locally instead (TODO PSRP-35).
     steps:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y ninja-build libxml2-dev libssl-dev
+        run: sudo apt-get update && sudo apt-get install -y ninja-build libxml2-dev libssl-dev libcurl4-openssl-dev libkrb5-dev gss-ntlmssp
 
       - name: Build
         run: |
@@ -90,7 +94,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build libxml2-dev libssl-dev valgrind
+          sudo apt-get install -y ninja-build libxml2-dev libssl-dev libcurl4-openssl-dev libkrb5-dev valgrind
 
       - name: Build
         run: |
