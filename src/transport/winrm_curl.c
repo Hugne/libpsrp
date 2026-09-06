@@ -7,7 +7,7 @@
  * Nothing here knows what travels on the streams it moves. PSRP's use of this
  * client lives in psrp_over_winrm.c.
  *
- * Four things about this are not obvious and were each established the hard
+ * Seven things about this are not obvious and were each established the hard
  * way against a live server. They are the reason this file looks the way it
  * does, so they are recorded here rather than in a commit nobody will read:
  *
@@ -29,11 +29,50 @@
  *     security context to itself. We need that context to encrypt bodies.
  *
  *  4. Message encryption needs the signature and the ciphertext separately.
- *     gss_wrap_iov produces exactly that and Kerberos requires it, its header
- *     being variable-length. gss-ntlmssp does not implement IOV at all --
- *     it answers GSS_S_UNAVAILABLE -- but an NTLM signature is a fixed 16
- *     bytes, so plain gss_wrap output can be split by hand. Both paths are
+ *     gss_wrap_iov produces exactly that and Kerberos requires it, its
+ *     signature being variable-length. gss-ntlmssp does not implement IOV at
+ *     all -- it answers GSS_S_UNAVAILABLE -- but an NTLM signature is a fixed
+ *     16 bytes, so plain gss_wrap output can be split by hand. Both paths are
  *     here, chosen by what the mechanism supports rather than by preference.
+ *     See note 7 for the shape the IOV call has to ask for.
+ *
+ *  5. A finished context does not have to hand back a final token. Kerberos
+ *     with mutual authentication ends by CONSUMING the server's AP-REP: that
+ *     call returns GSS_S_COMPLETE and an empty output token, and there is
+ *     nothing left to send. NTLM never does this -- its last leg is always
+ *     the AUTHENTICATE message -- so treating "no token" as the end of the
+ *     exchange works for NTLM and silently loses Kerberos, which then fails
+ *     as if the handshake had never completed. Completion is checked on its
+ *     own, and the token is sent only if there is one.
+ *
+ *  6. Forcing Kerberos is done to the CREDENTIAL, not to the wire. The
+ *     obvious reading -- force Kerberos by initialising the context with the
+ *     Kerberos OID -- puts a bare AP-REQ on the wire, and Windows will
+ *     happily authenticate it and then refuse everything that follows,
+ *     because the context is filed under a different package than the one it
+ *     looks in later. It fails differently depending on how the mismatch is
+ *     dressed up: 401 under the Negotiate scheme, an empty 500 straight from
+ *     http.sys if the body claims Kerberos encryption, 400 under the Kerberos
+ *     scheme. None of them mentions a package. The wire mechanism is always
+ *     SPNEGO; a mechanism is forced by acquiring a credential for that
+ *     mechanism alone, leaving SPNEGO nothing else it could offer, and the
+ *     result is confirmed by asking the context what it settled on.
+ *
+ *  7. Do NOT ask gss_wrap_iov for a trailer. Windows builds this blob with
+ *     SSPI's EncryptMessage, whose output is one token followed by the
+ *     ciphertext -- there is no room in that layout for a checksum at the
+ *     end. Request HEADER/DATA/PADDING/TRAILER and MIT krb5 obliges, putting
+ *     the checksum after the data: a well-formed GSS token that Windows
+ *     cannot read. Omit the trailer and MIT emits the SSPI-compatible
+ *     rotated form instead, with the whole token in the header buffer, which
+ *     is what the four-byte length in front of it is describing. The symptom
+ *     of getting this wrong is an empty HTTP 400 and "couldn't decrypt the
+ *     packet" in the server's event log.
+ *
+ * Two environment variables make the above debuggable when it goes wrong
+ * again: PSRP_GSS_TRACE reports each authentication round and the size of
+ * every wrap, and PSRP_HTTP_TRACE turns on curl's own verbose output. Both
+ * write to stderr and are silent unless set.
  */
 
 #define _GNU_SOURCE
@@ -58,8 +97,18 @@
 #define WS_XFER   "http://schemas.xmlsoap.org/ws/2004/09/transfer"
 #define WS_SHELL  "http://schemas.microsoft.com/wbem/wsman/1/windows/shell"
 
-/* MS-WSMV 2.2.9.1. Both strings are fixed by the protocol, not chosen. */
+/* MS-WSMV 2.2.9.1. The boundary is fixed by the protocol, not chosen. */
 #define ENC_BOUNDARY "Encrypted Boundary"
+
+/* This names the authentication package that produced the security context,
+ * not the cipher, and WinRM checks it: the wrong name is refused with a bare
+ * HTTP 400 and "couldn't decrypt the packet" in the server's event log, which
+ * reads as a corrupt payload rather than as a label it disagreed with. It is
+ * SPNEGO for every context this client establishes, Kerberos included, since
+ * SPNEGO is what carried them -- MS-WSMV also defines
+ * application/HTTP-Kerberos-session-encrypted, but that belongs to a bare
+ * AP-REQ sent under the Kerberos HTTP scheme, which note 6 explains we do
+ * not do. */
 #define ENC_PROTOCOL "application/HTTP-SPNEGO-session-encrypted"
 
 /* NTLM's signature is this size; see note 4 above. */
@@ -70,11 +119,11 @@
 
 /* The three mechanisms, by OID.
  *
- * SPNEGO negotiates; the other two are it forced one way or the other, which
- * is what a test needs when the point is to prove which one was used.
+ * SPNEGO negotiates; naming one of the others narrows what it may negotiate,
+ * which is what a test needs when the point is to prove which one was used.
  *
- * Windows accepts a bare NTLM or Kerberos token under the "Negotiate" HTTP
- * scheme, so forcing a mechanism needs no change to the header we send. */
+ * Only SPNEGO and NTLM are ever put on the wire; the Kerberos OID appears
+ * here as something to constrain a credential to. See note 6. */
 static gss_OID_desc spnego_oid = { 6, (void *)"\x2b\x06\x01\x05\x05\x02" };
 
 /* Kerberos 5, 1.2.840.113554.1.2.2 */
@@ -85,15 +134,23 @@ static gss_OID_desc krb5_oid = { 9,
 static gss_OID_desc ntlm_oid = { 10,
     (void *)"\x2b\x06\x01\x04\x01\x82\x37\x02\x02\x0a" };
 
-static gss_OID mech_for(winrm_auth_t a)
+/* What goes on the wire. Never a bare Kerberos AP-REQ, however emphatically
+ * the caller asked for Kerberos -- see note 6. */
+static gss_OID wire_mech_for(winrm_auth_t a)
 {
     switch (a) {
-    case WINRM_AUTH_KERBEROS:  return &krb5_oid;
+    case WINRM_AUTH_KERBEROS:
     case WINRM_AUTH_NEGOTIATE: return &spnego_oid;
     /* DEFAULT and NTLM alike: see the note in winrm.h for why the
      * default is not SPNEGO yet. */
-    default:                        return &ntlm_oid;
+    default:                   return &ntlm_oid;
     }
+}
+
+/* The mechanism SPNEGO must end up using, or NULL to let it choose. */
+static gss_OID required_mech_for(winrm_auth_t a)
+{
+    return a == WINRM_AUTH_KERBEROS ? &krb5_oid : NULL;
 }
 
 struct winrm_session {
@@ -107,7 +164,8 @@ struct winrm_session {
     gss_ctx_id_t gss;
     gss_cred_id_t cred;
     gss_name_t target;
-    gss_OID mech;                 /* what we asked for */
+    gss_OID mech;       /* what goes on the wire */
+    gss_OID require;    /* mechanism SPNEGO must settle on, or NULL */
     winrm_auth_t negotiated; /* what the context actually used */
     bool authenticated;
 
@@ -232,6 +290,8 @@ static psrp_result_t http_post(winrm_session_t *t, const char *ctype,
     curl_easy_setopt(t->curl, CURLOPT_WRITEFUNCTION, on_body);
     curl_easy_setopt(t->curl, CURLOPT_WRITEDATA, t);
     curl_easy_setopt(t->curl, CURLOPT_TIMEOUT_MS, (long)t->timeout_ms);
+    if (getenv("PSRP_HTTP_TRACE"))
+        curl_easy_setopt(t->curl, CURLOPT_VERBOSE, 1L);
 
     cc = curl_easy_perform(t->curl);
     curl_slist_free_all(hl);
@@ -245,6 +305,36 @@ static psrp_result_t http_post(winrm_session_t *t, const char *ctype,
 }
 
 /* ------------------------------------------------------- authentication -- */
+
+/* Records which mechanism the established context actually used.
+ *
+ * Asked of the context rather than assumed from what we requested. Under
+ * SPNEGO that is the whole question, and a test meaning to exercise Kerberos
+ * has to be able to tell that it did not quietly succeed over NTLM instead.
+ *
+ * This also decides how the session authenticates from here on, which is not
+ * a matter of taste: see note 6. */
+static void record_negotiated(winrm_session_t *t)
+{
+    gss_OID actual = GSS_C_NO_OID;
+    OM_uint32 m;
+
+    if (t->mech == &krb5_oid)      t->negotiated = WINRM_AUTH_KERBEROS;
+    else if (t->mech == &ntlm_oid) t->negotiated = WINRM_AUTH_NTLM;
+
+    if (gss_inquire_context(&m, t->gss, NULL, NULL, NULL, &actual,
+                            NULL, NULL, NULL) == GSS_S_COMPLETE &&
+        actual != GSS_C_NO_OID) {
+        if (actual->length == krb5_oid.length &&
+            memcmp(actual->elements, krb5_oid.elements,
+                   krb5_oid.length) == 0)
+            t->negotiated = WINRM_AUTH_KERBEROS;
+        else if (actual->length == ntlm_oid.length &&
+                 memcmp(actual->elements, ntlm_oid.elements,
+                        ntlm_oid.length) == 0)
+            t->negotiated = WINRM_AUTH_NTLM;
+    }
+}
 
 static psrp_result_t authenticate(winrm_session_t *t)
 {
@@ -261,6 +351,7 @@ static psrp_result_t authenticate(winrm_session_t *t)
     for (round = 0; round < 8; round++) {
         char *hdr;
         long status = 0;
+        size_t produced;
 
         out_tok.value = NULL;
         out_tok.length = 0;
@@ -276,52 +367,52 @@ static psrp_result_t authenticate(winrm_session_t *t)
             set_gss_error(t, "gss_init_sec_context", major, minor);
             goto done;
         }
-        if (!out_tok.length) break;
+        if (getenv("PSRP_GSS_TRACE"))
+            fprintf(stderr, "[gss] round %d in=%zu major=0x%08x out=%zu\n",
+                    round, (size_t)in_tok.length, (unsigned)major,
+                    (size_t)out_tok.length);
+        /* Send only if the mechanism actually produced something. Whether
+         * the context is complete is a separate question from whether there
+         * is a last token to deliver, and conflating the two is note 5 at the
+         * top of this file: Kerberos finishes on an empty token. */
+        /* gss_release_buffer zeroes the descriptor, so anything we want to
+         * know about the token has to be remembered before it is freed. */
+        produced = (size_t)out_tok.length;
 
-        psrp_buffer_reset(&b64);
-        if (psrp_base64_encode_buf(&b64, out_tok.value, out_tok.length)
-            != PSRP_OK) {
+        if (produced) {
+            psrp_buffer_reset(&b64);
+            if (psrp_base64_encode_buf(&b64, out_tok.value, out_tok.length)
+                != PSRP_OK) {
+                gss_release_buffer(&minor, &out_tok);
+                rc = PSRP_ERR_NOMEM;
+                goto done;
+            }
             gss_release_buffer(&minor, &out_tok);
-            rc = PSRP_ERR_NOMEM;
-            goto done;
+
+            hdr = (char *)malloc(b64.len + 32);
+            if (!hdr) { rc = PSRP_ERR_NOMEM; goto done; }
+            snprintf(hdr, b64.len + 32, "Authorization: Negotiate %.*s",
+                     (int)b64.len, (const char *)b64.data);
+
+            /* Empty body, deliberately; see note 2 at the top of this file. */
+            rc = http_post(t, NULL, NULL, 0, hdr, &status);
+            free(hdr);
+            if (getenv("PSRP_GSS_TRACE"))
+                fprintf(stderr, "[gss]   http %ld, challenge %s\n", status,
+                        t->challenge[0] ? "yes" : "no");
+            if (rc != PSRP_OK) goto done;
         }
-        gss_release_buffer(&minor, &out_tok);
-
-        hdr = (char *)malloc(b64.len + 32);
-        if (!hdr) { rc = PSRP_ERR_NOMEM; goto done; }
-        snprintf(hdr, b64.len + 32, "Authorization: Negotiate %.*s",
-                 (int)b64.len, (const char *)b64.data);
-
-        /* Empty body, deliberately; see note 2 at the top of this file. */
-        rc = http_post(t, NULL, NULL, 0, hdr, &status);
-        free(hdr);
-        if (rc != PSRP_OK) goto done;
 
         if (major == GSS_S_COMPLETE) {
-            gss_OID actual = GSS_C_NO_OID;
-            OM_uint32 m2;
-
             t->authenticated = true;
-            if (t->mech == &krb5_oid) t->negotiated = WINRM_AUTH_KERBEROS;
-            else if (t->mech == &ntlm_oid) t->negotiated = WINRM_AUTH_NTLM;
-
-            /* Ask the context which mechanism it settled on rather than
-             * assuming. Under SPNEGO that is the whole question, and a test
-             * meaning to exercise Kerberos has to be able to tell that it did
-             * not quietly succeed over NTLM instead. */
-            if (gss_inquire_context(&m2, t->gss, NULL, NULL, NULL, &actual,
-                                    NULL, NULL, NULL) == GSS_S_COMPLETE &&
-                actual != GSS_C_NO_OID) {
-                if (actual->length == krb5_oid.length &&
-                    memcmp(actual->elements, krb5_oid.elements,
-                           krb5_oid.length) == 0)
-                    t->negotiated = WINRM_AUTH_KERBEROS;
-                else if (actual->length == ntlm_oid.length &&
-                         memcmp(actual->elements, ntlm_oid.elements,
-                                ntlm_oid.length) == 0)
-                    t->negotiated = WINRM_AUTH_NTLM;
-            }
+            record_negotiated(t);
             rc = PSRP_OK;
+            goto done;
+        }
+        if (!produced) {
+            set_error(t, "authenticate",
+                      "mechanism wants another round but produced no token");
+            rc = PSRP_ERR_TRANSPORT;
             goto done;
         }
         if (!t->challenge[0]) {
@@ -364,7 +455,7 @@ static psrp_result_t encrypt_body(winrm_session_t *t, const char *soap,
                                   size_t slen, psrp_buffer_t *out)
 {
     OM_uint32 major, minor;
-    gss_iov_buffer_desc iov[4];
+    gss_iov_buffer_desc iov[3];
     gss_buffer_desc in, wrapped;
     unsigned char *scratch = NULL;
     const unsigned char *sig = NULL, *enc = NULL;
@@ -392,23 +483,32 @@ static psrp_result_t encrypt_body(winrm_session_t *t, const char *soap,
     if (!scratch) return PSRP_ERR_NOMEM;
     memcpy(scratch, soap, slen);
 
+    /* HEADER, DATA, PADDING and deliberately no TRAILER.
+     *
+     * Windows produces this blob with SSPI's EncryptMessage, which returns
+     * one token buffer and the ciphertext -- there is nowhere in its layout
+     * for a trailing checksum. Ask MIT krb5 for a trailer and it obliges,
+     * putting the checksum AFTER the data; the result is a perfectly valid
+     * GSS token that Windows cannot read, and http.sys rejects it with an
+     * empty HTTP 400 and "couldn't decrypt the packet" in the event log.
+     * Omit the trailer and MIT emits the SSPI-compatible rotated form
+     * instead, with the whole token in the header buffer -- which is what
+     * the four-byte length prefix in front of it is describing. */
     memset(iov, 0, sizeof iov);
     iov[0].type = GSS_IOV_BUFFER_TYPE_HEADER | GSS_IOV_BUFFER_FLAG_ALLOCATE;
     iov[1].type = GSS_IOV_BUFFER_TYPE_DATA;
     iov[1].buffer.value = scratch;
     iov[1].buffer.length = slen;
     iov[2].type = GSS_IOV_BUFFER_TYPE_PADDING | GSS_IOV_BUFFER_FLAG_ALLOCATE;
-    iov[3].type = GSS_IOV_BUFFER_TYPE_TRAILER | GSS_IOV_BUFFER_FLAG_ALLOCATE;
 
-    major = gss_wrap_iov(&minor, t->gss, 1, GSS_C_QOP_DEFAULT, &conf, iov, 4);
+    major = gss_wrap_iov(&minor, t->gss, 1, GSS_C_QOP_DEFAULT, &conf, iov, 3);
     if (major == GSS_S_COMPLETE) {
         used_iov = true;
         sig = (const unsigned char *)iov[0].buffer.value;
         siglen = iov[0].buffer.length;
-        /* Padding and trailer belong with the ciphertext, not the signature. */
+        /* Padding rides with the ciphertext; for AES it is empty. */
         enc = (const unsigned char *)iov[1].buffer.value;
-        enclen = iov[1].buffer.length + iov[2].buffer.length +
-                 iov[3].buffer.length;
+        enclen = iov[1].buffer.length + iov[2].buffer.length;
     } else {
         in.value = (void *)soap;
         in.length = slen;
@@ -430,6 +530,10 @@ static psrp_result_t encrypt_body(winrm_session_t *t, const char *soap,
         enc = sig + NTLM_SIGNATURE_BYTES;
         enclen = wrapped.length - NTLM_SIGNATURE_BYTES;
     }
+
+    if (getenv("PSRP_GSS_TRACE"))
+        fprintf(stderr, "[enc] iov=%d plain=%zu sig=%zu ct=%zu conf=%d\n",
+                (int)used_iov, slen, siglen, enclen, conf);
 
     /* Never send a body the context declined to encrypt. */
     if (!conf) {
@@ -462,7 +566,7 @@ static psrp_result_t encrypt_body(winrm_session_t *t, const char *soap,
                                                    "--" ENC_BOUNDARY "--\r\n");
 
 done:
-    if (used_iov) gss_release_iov_buffer(&minor, iov, 4);
+    if (used_iov) gss_release_iov_buffer(&minor, iov, 3);
     else gss_release_buffer(&minor, &wrapped);
     free(scratch);
     return rc;
@@ -546,13 +650,29 @@ static psrp_result_t soap_call(winrm_session_t *t, const char *soap,
          * status alone says almost nothing about what went wrong. */
         psrp_buffer_t fault;
         char detail[256];
+        const char *body = NULL;
+        const char *m;
+
         psrp_buffer_init(&fault);
         snprintf(detail, sizeof detail, "HTTP %ld", status);
+
+        /* A fault is usually encrypted like anything else, but not always:
+         * WinRM answers a request it could not even parse in the clear,
+         * and those are exactly the faults worth reading. Try the encrypted
+         * form, then fall back to reading the response as it arrived. */
         if (decrypt_body(t, t->resp.data, t->resp.len, &fault) == PSRP_OK &&
-            fault.len) {
-            const char *m = strstr((const char *)fault.data, "<f:Message");
-            if (m) snprintf(detail, sizeof detail, "HTTP %ld: %.180s",
-                            status, m);
+            fault.len)
+            body = (const char *)fault.data;
+        else if (t->resp.len &&
+                 psrp_buffer_append(&t->resp, "", 1) == PSRP_OK)
+            body = (const char *)t->resp.data;
+
+        if (body) {
+            m = strstr(body, "<f:Message");
+            if (!m) m = strstr(body, "<s:Text");
+            if (!m) m = strstr(body, "<f:Detail");
+            snprintf(detail, sizeof detail, "HTTP %ld: %.180s", status,
+                     m ? m : body);
         }
         psrp_buffer_free(&fault);
         set_error(t, "soap", detail);
@@ -627,6 +747,7 @@ psrp_result_t winrm_session_open(const winrm_config_t *cfg,
     const char *conn;
     char spn[300];
     const char *hoststart, *hostend;
+    winrm_auth_t auth;
 
     if (!out) return PSRP_ERR_INVALID_ARG;
     *out = NULL;
@@ -641,7 +762,18 @@ psrp_result_t winrm_session_open(const winrm_config_t *cfg,
     t->target = GSS_C_NO_NAME;
     t->timeout_ms = (cfg && cfg->operation_timeout_ms)
                         ? cfg->operation_timeout_ms : DEFAULT_TIMEOUT_MS;
-    t->mech = mech_for(cfg ? cfg->auth : WINRM_AUTH_DEFAULT);
+    auth = cfg ? cfg->auth : WINRM_AUTH_DEFAULT;
+    if (auth == WINRM_AUTH_DEFAULT) {
+        /* Resolve the default against the credential we were actually given;
+         * see the discussion on winrm_auth_t. A password means NTLM, because
+         * SPNEGO cannot encrypt what it authenticates that way; no password
+         * means SPNEGO, which is the only one of the two that can use a
+         * ticket cache. */
+        auth = (cfg && cfg->password && *cfg->password)
+             ? WINRM_AUTH_NTLM : WINRM_AUTH_NEGOTIATE;
+    }
+    t->mech = wire_mech_for(auth);
+    t->require = required_mech_for(auth);
     t->negotiated = WINRM_AUTH_DEFAULT;
 
     /* With no username, GSS_C_NO_CREDENTIAL means "whatever the environment
@@ -681,7 +813,9 @@ psrp_result_t winrm_session_open(const winrm_config_t *cfg,
         pbuf.value = t->pass;
         pbuf.length = strlen(t->pass);
         {
-            gss_OID_set_desc mechs = { 1, t->mech };
+            /* A credential for the mechanism that has to be used, which for
+             * SPNEGO is what constrains what it may offer. */
+            gss_OID_set_desc mechs = { 1, t->require ? t->require : t->mech };
             major = gss_acquire_cred_with_password(&minor, user_name, &pbuf,
                                                    GSS_C_INDEFINITE, &mechs,
                                                    GSS_C_INITIATE, &t->cred,
@@ -690,6 +824,20 @@ psrp_result_t winrm_session_open(const winrm_config_t *cfg,
         gss_release_name(&minor, &user_name);
         if (major != GSS_S_COMPLETE) {
             set_gss_error(t, "gss_acquire_cred_with_password", major, minor);
+            winrm_session_free(t);
+            return PSRP_ERR_TRANSPORT;
+        }
+    } else if (t->require) {
+        /* No password: the credential comes from the ticket cache. It still
+         * has to be narrowed to the required mechanism, or SPNEGO is free to
+         * fall back to something else and "forced Kerberos" would mean
+         * nothing. */
+        gss_OID_set_desc mechs = { 1, t->require };
+        major = gss_acquire_cred(&minor, GSS_C_NO_NAME, GSS_C_INDEFINITE,
+                                 &mechs, GSS_C_INITIATE, &t->cred,
+                                 NULL, NULL);
+        if (major != GSS_S_COMPLETE) {
+            set_gss_error(t, "gss_acquire_cred", major, minor);
             winrm_session_free(t);
             return PSRP_ERR_TRANSPORT;
         }

@@ -41,6 +41,14 @@ int main(void)
         printf("skipped: set PSRP_INTEROP=1 to run the curl transport test\n");
         return 0;
     }
+    /* This one authenticates with a name and password. Without them it would
+     * fall back to whatever the ambient credentials are and report a failure
+     * that says nothing about the code, so say what is missing instead.
+     * (test_kerberos is the opposite case: it must run with NO password.) */
+    if (!getenv("PSRP_USER") || !getenv("PSRP_PASS")) {
+        printf("skipped: set PSRP_USER and PSRP_PASS as well\n");
+        return 0;
+    }
 
     memset(&cfg, 0, sizeof cfg);
     cfg.connection = getenv("PSRP_CONNECTION");

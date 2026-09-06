@@ -112,6 +112,15 @@ endif()  # WIN32: interop suites
 # create a shell, negotiate -- is exactly what was in doubt, so it is worth a
 # test of its own rather than waiting for the full suites to become portable.
 if(NOT WIN32)
+  # Kerberos against a real KDC. Skips itself unless PSRP_CONNECTION names an
+  # endpoint by FQDN, since a service ticket is issued for HTTP/<fqdn> and
+  # connecting by address asks the KDC for a principal it has never heard of.
+  add_executable(test_kerberos interop/test_kerberos.c)
+  target_link_libraries(test_kerberos PRIVATE psrp psrp_flags)
+  target_include_directories(test_kerberos PRIVATE ${CMAKE_SOURCE_DIR}/src)
+  add_test(NAME interop.test_kerberos COMMAND test_kerberos)
+  set_tests_properties(interop.test_kerberos PROPERTIES LABELS "interop" TIMEOUT 300)
+
   add_executable(test_curl_open interop/test_curl_open.c)
   target_link_libraries(test_curl_open PRIVATE psrp psrp_flags)
   target_include_directories(test_curl_open PRIVATE ${CMAKE_SOURCE_DIR}/src)

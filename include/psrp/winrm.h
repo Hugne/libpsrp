@@ -38,18 +38,26 @@ typedef struct winrm_session winrm_session_t;
 
 /** Which authentication mechanism to use.
  *
- * DEFAULT is NTLM today, which is not where this should end up. SPNEGO would
- * be the natural default -- it takes Kerberos where a realm and a ticket
- * exist and falls back to NTLM where they do not, which is what a Windows
- * client does -- but measured against a workgroup target it does not
- * authenticate at all: gss-ntlmssp under SPNEGO leaves a context that reports
- * success and then fails at the first wrap with "no context has been
- * established". Until that is understood against a real KDC, the default is
- * the mechanism that demonstrably works.
+ * DEFAULT follows the credential, because measurement against a domain
+ * controller says the two cases differ. Given a password it is NTLM; given
+ * none it is SPNEGO, which then takes Kerberos from the ticket cache.
+ *
+ * SPNEGO is not the default in both cases only because it does not work in
+ * both cases. With a name and password it still fails at the first wrap with
+ * "no context has been established" -- gss-ntlmssp under SPNEGO leaves a
+ * context that reports success and cannot encrypt -- and that was measured
+ * against a real KDC, not only against the workgroup target that first
+ * showed it, so the mechanism is at fault rather than the absence of a
+ * realm. With no password and a ticket cache present, the same SPNEGO
+ * request negotiates Kerberos and works, which is exactly the case NTLM
+ * cannot serve at all.
  *
  * Naming the mechanism explicitly is what a test should do regardless.
  * Proving Kerberos was exercised means refusing to succeed by another route,
- * and winrm_negotiated_auth reports what was actually used. */
+ * and winrm_negotiated_auth reports what was actually used.
+ *
+ * On Windows these select WSMan's own authentication flags and this
+ * discussion does not apply. */
 typedef enum winrm_auth {
     WINRM_AUTH_DEFAULT = 0,
     WINRM_AUTH_NTLM,
