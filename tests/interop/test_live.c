@@ -8,8 +8,6 @@
  * When disabled it reports success without connecting, so the default `ctest`
  * run stays green on a machine with no WinRM.
  */
-#include <windows.h>
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

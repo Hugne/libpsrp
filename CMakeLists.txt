@@ -104,10 +104,14 @@ else()
   find_package(PkgConfig REQUIRED)
   pkg_check_modules(LIBXML2 REQUIRED IMPORTED_TARGET libxml-2.0)
   pkg_check_modules(OPENSSL REQUIRED IMPORTED_TARGET libcrypto)
+  pkg_check_modules(CURL REQUIRED IMPORTED_TARGET libcurl)
+  pkg_check_modules(GSSAPI REQUIRED IMPORTED_TARGET krb5-gssapi)
   target_sources(psrp PRIVATE
     src/xml/xml_libxml2.c
     src/platform/random_posix.c
     src/crypto/crypto_openssl.c
+    src/transport/transport_curl.c
+    src/client/client.c
   )
 
   # The archives are linked by absolute path rather than by asking pkg-config
@@ -158,7 +162,12 @@ int main(void){return EVP_aes_256_cbc()?0:1;}"
   else()
     target_link_libraries(psrp PUBLIC PkgConfig::OPENSSL)
   endif()
-  set(PSRP_HAVE_TRANSPORT OFF CACHE INTERNAL "")
+
+  # No static options for these two yet: a static libcurl needs the same
+  # jitterentropy archive Debian does not package, and Kerberos ships no
+  # archives at all there. See TODO PSRP-03.
+  target_link_libraries(psrp PUBLIC PkgConfig::CURL PkgConfig::GSSAPI)
+  set(PSRP_HAVE_TRANSPORT ON CACHE INTERNAL "")
 endif()
 
 if(PSRP_BUILD_TESTS)

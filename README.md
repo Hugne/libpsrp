@@ -78,14 +78,13 @@ To talk to a server, Windows: the transport is the Win32 WSMan client
 (`WsmSvc`), crypto is CNG (`bcrypt`), and shell enumeration uses the WSMan COM
 automation interface (`ole32`, `oleaut32`).
 
-The protocol itself is platform-free and builds on Linux too, needing libxml2
-and OpenSSL. That build is a real subset rather than a stub: the state
-machine, CLIXML, fragmentation, messages, the object model and the whole
-crypto path compile and pass their tests in CI, including the session key
-exchange and SecureString protection. What is missing is the transport, and it
-is *absent* rather than faked -- `psrp_client` and the WSMan transport do not
-exist there at all. Enough to speak PSRP; not yet enough to connect. See TODO
-PSRP-03.
+On Linux it needs libxml2, OpenSSL, libcurl and MIT Kerberos, and NTLM
+additionally wants the `gss-ntlmssp` mechanism installed at run time. That
+build is a real subset, honestly labelled: the protocol core and crypto are
+complete, and the curl transport can authenticate, encrypt, open a
+RunspacePool and negotiate with a live server. Running a pipeline is not there
+yet -- `run_command` and `send` answer `PSRP_ERR_UNSUPPORTED` rather than
+pretending -- and shell enumeration is Windows-only. See TODO PSRP-35.
 
 On Linux the two dependencies can be linked from their static archives, one
 flag per library:

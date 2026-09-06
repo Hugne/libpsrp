@@ -19,8 +19,6 @@
  *   - a command that fails is reported as failing rather than as empty
  *     output, which is the failure mode a convenience wrapper invites.
  */
-#include <windows.h>
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

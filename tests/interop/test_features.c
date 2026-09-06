@@ -16,6 +16,7 @@
  *
  * Opt-in: PSRP_INTEROP=1, with PSRP_USER / PSRP_PASS.
  */
+/* Sleep(), and this suite is Windows-gated regardless. */
 #include <windows.h>
 
 #include <stdio.h>

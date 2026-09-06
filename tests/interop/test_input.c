@@ -27,8 +27,6 @@
  *
  * Opt-in: PSRP_INTEROP=1, with PSRP_USER / PSRP_PASS.
  */
-#include <windows.h>
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

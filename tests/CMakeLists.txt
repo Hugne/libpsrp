@@ -43,14 +43,18 @@ psrp_add_unit_test(test_invocation unit/test_invocation.c)
 # reasonable-looking choice would fail to interoperate silently.
 psrp_add_unit_test(test_crypto unit/test_crypto.c)
 
-# Shell enumeration is the WSMan COM API and has no POSIX counterpart.
-if(PSRP_HAVE_TRANSPORT)
+# Shell enumeration goes through the WSMan COM automation interface and has no
+# POSIX counterpart; WS-Enumerate over curl would be a separate piece of work.
+if(WIN32)
   psrp_add_unit_test(test_enumerate unit/test_enumerate.c)
 endif()
 psrp_add_unit_test(test_differential unit/test_differential.c)
 target_include_directories(test_differential PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/unit)
 
-if(PSRP_HAVE_TRANSPORT)
+# The interop suites drive a full session, which the curl transport cannot do
+# until run_command and send land (TODO PSRP-35). They are Windows-only for
+# now rather than registered and failing.
+if(WIN32)
 
 # Live interop test. Labelled so it can be selected or excluded; it skips
 # itself unless PSRP_INTEROP=1, so the default run needs no WinRM.
@@ -102,7 +106,18 @@ target_include_directories(test_binary_roundtrip PRIVATE ${CMAKE_SOURCE_DIR}/src
 add_test(NAME interop.test_binary_roundtrip COMMAND test_binary_roundtrip)
 set_tests_properties(interop.test_binary_roundtrip PROPERTIES LABELS "interop" TIMEOUT 600)
 
-endif()  # PSRP_HAVE_TRANSPORT
+endif()  # WIN32: interop suites
+
+# The curl transport's own live test. What it can do -- authenticate, encrypt,
+# create a shell, negotiate -- is exactly what was in doubt, so it is worth a
+# test of its own rather than waiting for the full suites to become portable.
+if(NOT WIN32)
+  add_executable(test_curl_open interop/test_curl_open.c)
+  target_link_libraries(test_curl_open PRIVATE psrp psrp_flags)
+  target_include_directories(test_curl_open PRIVATE ${CMAKE_SOURCE_DIR}/src)
+  add_test(NAME interop.test_curl_open COMMAND test_curl_open)
+  set_tests_properties(interop.test_curl_open PROPERTIES LABELS "interop" TIMEOUT 300)
+endif()
 
 # Public header self-containment.
 #

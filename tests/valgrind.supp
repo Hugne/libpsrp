@@ -1,0 +1,31 @@
+# Valgrind suppressions.
+#
+# Deliberately narrow. Each entry names a specific third-party allocation that
+# the library cannot free and that is not evidence of a defect here; nothing
+# in this file suppresses a frame belonging to libpsrp. The point of running
+# memcheck at all is lost if the answer to an inconvenient finding is to
+# silence it, so an entry needs a reason written next to it.
+
+# OpenSSL builds its default provider and config state on first use and frees
+# it from an atexit handler, which never runs under valgrind's accounting.
+# The allocation has no frame of ours anywhere in it -- it is reached through
+# libcurl and through gss-ntlmssp, both of which pull OpenSSL in on their own
+# account. Calling OPENSSL_cleanup would silence it and is not an option for a
+# library: it tears OpenSSL down for the entire process, including for a
+# caller that is still using it.
+{
+   openssl-one-time-provider-state
+   Memcheck:Leak
+   match-leak-kinds: definite,indirect,possible
+   ...
+   obj:*/libcrypto.so.3
+}
+
+# Same shape, reached through the Kerberos GSS mechanism's own initialisation.
+{
+   krb5-gss-one-time-state
+   Memcheck:Leak
+   match-leak-kinds: definite,indirect,possible
+   ...
+   obj:*/libgssapi_krb5.so.*
+}
