@@ -81,10 +81,10 @@ automation interface (`ole32`, `oleaut32`).
 On Linux it needs libxml2, OpenSSL, libcurl and MIT Kerberos, and NTLM
 additionally wants the `gss-ntlmssp` mechanism installed at run time. That
 build is a real subset, honestly labelled: the protocol core and crypto are
-complete, and the curl transport can authenticate, encrypt, open a
-RunspacePool and negotiate with a live server. Running a pipeline is not there
-yet -- `run_command` and `send` answer `PSRP_ERR_UNSUPPORTED` rather than
-pretending -- and shell enumeration is Windows-only. See TODO PSRP-35.
+complete, and the curl transport authenticates, encrypts, opens a RunspacePool,
+runs pipelines and reads their output from a live server. Not there yet:
+disconnect, reconnect and connect answer `PSRP_ERR_UNSUPPORTED` rather than
+pretending, and shell enumeration is Windows-only. See TODO PSRP-35.
 
 On Linux the two dependencies can be linked from their static archives, one
 flag per library:

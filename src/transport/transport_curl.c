@@ -95,6 +95,7 @@ struct psrp_transport {
     char shell_sel[64];
     bool have_shell;
     psrp_guid_t command_id;
+    char cmd_sel[64];   /* the CommandId the server reports back */
     bool have_command;
     bool command_done;
     bool disconnected;
@@ -796,7 +797,7 @@ psrp_result_t psrp_transport_receive(psrp_transport_t *t, psrp_buffer_t *out,
                                      uint32_t timeout_ms)
 {
     psrp_buffer_t soap, reply;
-    char cmd[PSRP_GUID_BUF_SIZE];
+    char cmd[64];   /* the server's CommandId, which need not be a GUID */
     psrp_result_t rc;
 
     (void)timeout_ms;   /* the operation timeout rides in the envelope */
@@ -811,9 +812,7 @@ psrp_result_t psrp_transport_receive(psrp_transport_t *t, psrp_buffer_t *out,
     if (!t->have_shell) return PSRP_ERR_STATE;
 
     cmd[0] = '\0';
-    if (t->have_command &&
-        guid_upper(&t->command_id, cmd, sizeof cmd) != PSRP_OK)
-        return PSRP_ERR_INTERNAL;
+    if (t->have_command) snprintf(cmd, sizeof cmd, "%s", t->cmd_sel);
 
     psrp_buffer_init(&soap);
     psrp_buffer_init(&reply);
@@ -871,6 +870,192 @@ psrp_result_t psrp_transport_close_shell(psrp_transport_t *t)
     return rc;
 }
 
+/* 3.1.5.3.3 puts only the FIRST fragment in Arguments; the rest follow by
+ * Send. Decoding one fragment header tells us where that boundary is. */
+static size_t first_fragment_len(const void *payload, size_t len)
+{
+    psrp_reader_t r;
+    psrp_fragment_t f;
+    psrp_reader_init(&r, payload, len);
+    if (psrp_fragment_decode(&r, &f) != PSRP_OK) return 0;
+    return r.pos;
+}
+
+/* Reads one named element's text out of a response, for the ids the server
+ * assigns. */
+static bool response_text(const psrp_buffer_t *reply, const char *element,
+                          char *out, size_t cap)
+{
+    psrp_xml_reader_t *r = NULL;
+    psrp_xml_node_t node;
+    bool want = false, found = false;
+
+    if (psrp_xml_reader_create(reply->data, reply->len, &r) != PSRP_OK)
+        return false;
+
+    while (psrp_xml_read(r, &node) == PSRP_OK && node != PSRP_XML_EOF) {
+        if (node == PSRP_XML_ELEMENT) {
+            want = strcmp(psrp_xml_local_name(r), element) == 0;
+        } else if (node == PSRP_XML_TEXT && want) {
+            size_t vlen = 0;
+            const char *v = psrp_xml_value(r, &vlen);
+            if (vlen && vlen < cap) {
+                snprintf(out, cap, "%.*s", (int)vlen, v);
+                found = true;
+            }
+            break;
+        } else {
+            want = false;
+        }
+    }
+    psrp_xml_reader_free(r);
+    return found;
+}
+
+/* Shared by both streams: PSRP carries data on "stdin" and host responses on
+ * "pr" (3.1.5.3.5). */
+static psrp_result_t send_on_stream(psrp_transport_t *t, const char *stream,
+                                    const void *data, size_t len)
+{
+    psrp_buffer_t soap, b64, reply;
+    psrp_result_t rc;
+
+    if (!t || (len && !data)) return PSRP_ERR_INVALID_ARG;
+    if (!t->have_shell) return PSRP_ERR_STATE;
+    if (len == 0) return PSRP_OK;
+
+    psrp_buffer_init(&soap);
+    psrp_buffer_init(&b64);
+    psrp_buffer_init(&reply);
+
+    rc = psrp_base64_encode_buf(&b64, data, len);
+    if (rc == PSRP_OK) rc = envelope_head(t, &soap, WS_SHELL "/Send", true);
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap,
+        "</s:Header><s:Body><rsp:Send><rsp:Stream Name=\"");
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap, stream);
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap, "\"");
+    if (rc == PSRP_OK && t->have_command) {
+        rc = psrp_buffer_append_str(&soap, " CommandId=\"");
+        if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap, t->cmd_sel);
+        if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap, "\"");
+    }
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap, ">");
+    if (rc == PSRP_OK) rc = psrp_buffer_append(&soap, b64.data, b64.len);
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap,
+        "</rsp:Stream></rsp:Send></s:Body></s:Envelope>");
+    if (rc == PSRP_OK) rc = psrp_buffer_append_u8(&soap, 0);
+    if (rc == PSRP_OK) rc = soap_call(t, (const char *)soap.data, &reply);
+
+    psrp_buffer_free(&soap);
+    psrp_buffer_free(&b64);
+    psrp_buffer_free(&reply);
+    return rc;
+}
+
+psrp_result_t psrp_transport_run_command(psrp_transport_t *t,
+                                         const psrp_guid_t *command_id,
+                                         const void *payload, size_t len)
+{
+    psrp_buffer_t soap, b64, reply;
+    char cmd[PSRP_GUID_BUF_SIZE];
+    size_t first;
+    psrp_result_t rc;
+
+    if (!t || !command_id || !payload || len == 0) return PSRP_ERR_INVALID_ARG;
+    if (!t->have_shell) return PSRP_ERR_STATE;
+
+    if (guid_upper(command_id, cmd, sizeof cmd) != PSRP_OK)
+        return PSRP_ERR_INTERNAL;
+
+    first = first_fragment_len(payload, len);
+    if (first == 0) return PSRP_ERR_MALFORMED;
+
+    t->command_id = *command_id;
+    t->command_done = false;
+
+    psrp_buffer_init(&soap);
+    psrp_buffer_init(&b64);
+    psrp_buffer_init(&reply);
+
+    rc = psrp_base64_encode_buf(&b64, payload, first);
+    if (rc == PSRP_OK) rc = envelope_head(t, &soap, WS_SHELL "/Command", true);
+
+    /* 3.1.5.3.3 says the Command element MUST be empty, and here it can be.
+     * The Windows transport cannot manage that -- the Win32 client rejects an
+     * empty command line client-side with 0x80338180 and has to send a single
+     * space instead (TODO PSRP-08). Writing the envelope ourselves, the spec's
+     * actual requirement is expressible. */
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap,
+        "</s:Header><s:Body><rsp:CommandLine CommandId=\"");
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap, cmd);
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap,
+        "\"><rsp:Command></rsp:Command><rsp:Arguments>");
+    if (rc == PSRP_OK) rc = psrp_buffer_append(&soap, b64.data, b64.len);
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap,
+        "</rsp:Arguments></rsp:CommandLine></s:Body></s:Envelope>");
+    if (rc == PSRP_OK) rc = psrp_buffer_append_u8(&soap, 0);
+    if (rc != PSRP_OK) goto done;
+
+    rc = soap_call(t, (const char *)soap.data, &reply);
+    if (rc != PSRP_OK) goto done;
+
+    /* As with the ShellId, use the identifier the server reports. */
+    snprintf(t->cmd_sel, sizeof t->cmd_sel, "%s", cmd);
+    (void)response_text(&reply, "CommandId", t->cmd_sel, sizeof t->cmd_sel);
+    t->have_command = true;
+
+    /* Fragments past the first travel by Send, per 3.1.5.3.3. */
+    if (len > first)
+        rc = send_on_stream(t, "stdin", (const uint8_t *)payload + first,
+                            len - first);
+
+done:
+    psrp_buffer_free(&soap);
+    psrp_buffer_free(&b64);
+    psrp_buffer_free(&reply);
+    return rc;
+}
+
+psrp_result_t psrp_transport_send(psrp_transport_t *t, const void *data,
+                                  size_t len)
+{
+    return send_on_stream(t, "stdin", data, len);
+}
+
+psrp_result_t psrp_transport_send_priority(psrp_transport_t *t,
+                                           const void *data, size_t len)
+{
+    return send_on_stream(t, "pr", data, len);
+}
+
+psrp_result_t psrp_transport_stop_pipeline(psrp_transport_t *t)
+{
+    psrp_buffer_t soap, reply;
+    psrp_result_t rc;
+
+    if (!t) return PSRP_ERR_INVALID_ARG;
+    if (!t->have_shell || !t->have_command) return PSRP_ERR_STATE;
+
+    psrp_buffer_init(&soap);
+    psrp_buffer_init(&reply);
+
+    /* Targeted at the command, so it stops that pipeline rather than the pool
+     * (3.1.4.4, 3.1.5.3.9). */
+    rc = envelope_head(t, &soap, WS_SHELL "/Signal", true);
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap,
+        "</s:Header><s:Body><rsp:Signal CommandId=\"");
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap, t->cmd_sel);
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap,
+        "\"><rsp:Code>" WS_SHELL "/signal/terminate</rsp:Code>"
+        "</rsp:Signal></s:Body></s:Envelope>");
+    if (rc == PSRP_OK) rc = psrp_buffer_append_u8(&soap, 0);
+    if (rc == PSRP_OK) rc = soap_call(t, (const char *)soap.data, &reply);
+
+    psrp_buffer_free(&soap);
+    psrp_buffer_free(&reply);
+    return rc;
+}
+
 /* ---------------------------------------------------- not ported yet --- */
 /*
  * These answer PSRP_ERR_UNSUPPORTED rather than pretending. The Windows
@@ -878,37 +1063,6 @@ psrp_result_t psrp_transport_close_shell(psrp_transport_t *t)
  * being built in. An absent operation that says so is recoverable; one that
  * silently does nothing is not.
  */
-
-psrp_result_t psrp_transport_run_command(psrp_transport_t *t,
-                                         const psrp_guid_t *command_id,
-                                         const void *payload, size_t len)
-{
-    (void)command_id; (void)payload; (void)len;
-    set_error(t, "run_command", "not in the curl transport yet");
-    return PSRP_ERR_UNSUPPORTED;
-}
-
-psrp_result_t psrp_transport_send(psrp_transport_t *t, const void *data,
-                                  size_t len)
-{
-    (void)data; (void)len;
-    set_error(t, "send", "not in the curl transport yet");
-    return PSRP_ERR_UNSUPPORTED;
-}
-
-psrp_result_t psrp_transport_send_priority(psrp_transport_t *t,
-                                           const void *data, size_t len)
-{
-    (void)data; (void)len;
-    set_error(t, "send_priority", "not in the curl transport yet");
-    return PSRP_ERR_UNSUPPORTED;
-}
-
-psrp_result_t psrp_transport_stop_pipeline(psrp_transport_t *t)
-{
-    set_error(t, "stop_pipeline", "not in the curl transport yet");
-    return PSRP_ERR_UNSUPPORTED;
-}
 
 psrp_result_t psrp_transport_disconnect(psrp_transport_t *t,
                                         uint32_t idle_timeout_ms)

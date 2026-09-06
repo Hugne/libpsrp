@@ -17,6 +17,7 @@
 #include "psrp/psrp.h"
 #include "psrp/psrp_session.h"
 #include "psrp/psrp_transport.h"
+#include "psrp/psrp_records.h"
 
 static int failures;
 
@@ -104,11 +105,71 @@ int main(void)
         if (c) printf("    server protocolversion %s\n", c->protocol_version);
     }
 
-    /* Everything past this point is deliberately absent from this transport;
-     * it must say so rather than appear to work. */
-    rc = psrp_transport_run_command(t, psrp_session_pool_id(s), "", 0);
+    /* ---- run a pipeline and read its output back ---------------------- */
+    if (opened) {
+        psrp_command_t *cmd = psrp_command_new("'hello from linux'; 6*7", true);
+        psrp_buffer_t cmdpay, text;
+        psrp_guid_t pid;
+        int state = -1, terminal = 0;
+
+        psrp_buffer_init(&cmdpay);
+        psrp_buffer_init(&text);
+
+        rc = psrp_session_pipeline_payload(s, &cmd, 1, PSRP_PIPELINE_NO_INPUT,
+                                           &pid, &cmdpay);
+        check(rc == PSRP_OK, "pipeline payload built");
+
+        if (rc == PSRP_OK)
+            rc = psrp_transport_run_command(t, &pid, cmdpay.data, cmdpay.len);
+        if (rc != PSRP_OK)
+            printf("    run_command: %s\n", psrp_transport_last_error(t));
+        check(rc == PSRP_OK, "command started");
+
+        for (i = 0; rc == PSRP_OK && i < 40 && !terminal; i++) {
+            psrp_buffer_t chunk;
+            psrp_event_t e;
+
+            psrp_buffer_init(&chunk);
+            rc = psrp_transport_receive(t, &chunk, 5000);
+            if (rc == PSRP_OK && chunk.len)
+                (void)psrp_session_receive(s, chunk.data, chunk.len);
+            psrp_buffer_free(&chunk);
+            if (rc == PSRP_ERR_TRUNCATED) rc = PSRP_OK;
+            if (rc != PSRP_OK) {
+                printf("    receive: %s\n", psrp_transport_last_error(t));
+                break;
+            }
+
+            while (psrp_session_next_event(s, &e) == PSRP_OK) {
+                if (e.kind == PSRP_EVENT_PIPELINE_OUTPUT)
+                    (void)psrp_value_to_text(&e.value, &text);
+                if (e.kind == PSRP_EVENT_ERROR_RECORD && e.text)
+                    printf("    [error] %s\n", e.text);
+                if (e.kind == PSRP_EVENT_PIPELINE_STATE) {
+                    state = e.state;
+                    if (psrp_invocation_state_is_terminal(state)) terminal = 1;
+                }
+                psrp_event_free(&e);
+            }
+        }
+
+        (void)psrp_buffer_append_u8(&text, 0);
+        check(state == PSRP_INVOCATION_COMPLETED, "pipeline completed");
+        check(strstr((const char *)text.data, "hello from linux") != NULL,
+              "its string output came back");
+        check(strstr((const char *)text.data, "42") != NULL,
+              "and the expression was evaluated remotely");
+        if (text.len > 1) printf("    output: %s\n", (const char *)text.data);
+
+        psrp_command_free(cmd);
+        psrp_buffer_free(&cmdpay);
+        psrp_buffer_free(&text);
+    }
+
+    /* Still deliberately absent; it must say so rather than appear to work. */
+    rc = psrp_transport_disconnect(t, 0);
     check(rc == PSRP_ERR_UNSUPPORTED,
-          "run_command reports UNSUPPORTED rather than failing silently");
+          "disconnect reports UNSUPPORTED rather than failing silently");
 
     rc = psrp_transport_close_shell(t);
     if (rc != PSRP_OK)
