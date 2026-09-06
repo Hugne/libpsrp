@@ -127,13 +127,18 @@ psrp_result_t winrm_send(winrm_session_t *s, const char *stream,
 psrp_result_t winrm_receive(winrm_session_t *s, psrp_buffer_t *out,
                             uint32_t timeout_ms);
 
-typedef enum winrm_signal {
-    WINRM_SIGNAL_TERMINATE = 0,
-    WINRM_SIGNAL_CTRL_C
-} winrm_signal_t;
+/** The two signals WS-Management defines, for callers that want them by
+ * name. `winrm_signal` takes any URI, because a plugin is free to define its
+ * own and this layer has no way to know which ones mean anything. */
+#define WINRM_SIGNAL_TERMINATE     "http://schemas.microsoft.com/wbem/wsman/1/windows/shell/signal/terminate"
+#define WINRM_SIGNAL_CTRL_C     "http://schemas.microsoft.com/wbem/wsman/1/windows/shell/signal/ctrl_c"
 
-/** wxf:Signal, targeted at the running command rather than the shell. */
-psrp_result_t winrm_signal(winrm_session_t *s, winrm_signal_t code);
+/** wxf:Signal, targeted at the running command rather than the shell.
+ *
+ * `code` is the signal's URI and is the CALLER's choice. Which signals a
+ * shell understands is a property of the plugin behind it, not of
+ * WS-Management, so nothing here interprets it. */
+psrp_result_t winrm_signal(winrm_session_t *s, const char *code);
 
 /** True once the server has reported the command finished. */
 bool winrm_command_done(const winrm_session_t *s);

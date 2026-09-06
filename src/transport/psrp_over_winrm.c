@@ -162,10 +162,22 @@ psrp_result_t psrp_transport_receive(psrp_transport_t *t, psrp_buffer_t *out,
     return winrm_receive(t->s, out, timeout_ms);
 }
 
+/* PowerShell's own signal for "stop the running pipeline", and the
+ * misspelling is the specification's: MS-PSRP 3.1.5.3.9 really does write
+ * "crtl_c", in both places it appears, and PowerShell expects it verbatim.
+ * Tidying it would silently break cancellation.
+ *
+ * It belongs here rather than in either WinRM client. WS-Management's own
+ * terminate URI is a different signal that the PowerShell plugin does not
+ * act on the same way, and which of them a shell understands is a property
+ * of the plugin behind it -- so the layer that knows it is talking to
+ * PowerShell is the layer that gets to say. */
+#define PSRP_SIGNAL_STOP "powershell/signal/crtl_c"
+
 psrp_result_t psrp_transport_stop_pipeline(psrp_transport_t *t)
 {
     if (!t) return PSRP_ERR_INVALID_ARG;
-    return winrm_signal(t->s, WINRM_SIGNAL_TERMINATE);
+    return winrm_signal(t->s, PSRP_SIGNAL_STOP);
 }
 
 psrp_result_t psrp_transport_close_shell(psrp_transport_t *t)

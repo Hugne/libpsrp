@@ -731,38 +731,26 @@ psrp_result_t winrm_send(winrm_session_t *t, const char *stream,
 }
 
 
-/* 3.1.5.3.9 fixes this string, and it is misspelled: "crtl_c", not "ctrl_c".
- * Both occurrences in the spec agree, and PowerShell expects it verbatim.
- * Tidying the typo would silently break cancellation. */
-/* The code this API is given for "stop the running command".
- *
- * It is PowerShell's own signal rather than WS-Management's generic
- * terminate, and the misspelling is the specification's: MS-PSRP 3.1.5.3.9
- * really does write "crtl_c". Left exactly as it is because it is what the
- * live stop test exercises against a real endpoint; the curl client sends
- * WS-Management's terminate URI for the same request and is likewise
- * unchanged. Unifying them is not something to do without a server in front
- * of it. */
-static PCWSTR kSignalTerminate = L"powershell/signal/crtl_c";
-static PCWSTR kSignalCtrlC = L"powershell/signal/crtl_c";
-
-psrp_result_t winrm_signal(winrm_session_t *t, winrm_signal_t code)
+psrp_result_t winrm_signal(winrm_session_t *t, const char *code)
 {
     async_op_t op;
     WSMAN_SHELL_ASYNC async;
     WSMAN_OPERATION_HANDLE sig = NULL;
+    wchar_t code_w[128];
     psrp_result_t rc = PSRP_OK;
+    int n;
 
-    if (!t) return PSRP_ERR_INVALID_ARG;
+    if (!t || !code || !*code) return PSRP_ERR_INVALID_ARG;
     if (!t->shell || !t->command) return PSRP_ERR_STATE;
+
+    n = MultiByteToWideChar(CP_UTF8, 0, code, -1, code_w,
+                            (int)(sizeof code_w / sizeof code_w[0]));
+    if (n <= 0) return PSRP_ERR_OVERFLOW;
 
     op_init(&op);
     async.operationContext = &op;
     async.completionFunction = generic_completion;
-    WSManSignalShell(t->shell, t->command, 0,
-                     code == WINRM_SIGNAL_CTRL_C ? kSignalCtrlC
-                                                 : kSignalTerminate,
-                     &async, &sig);
+    WSManSignalShell(t->shell, t->command, 0, code_w, &async, &sig);
     if (WaitForSingleObject(op.done, t->timeout_ms) != WAIT_OBJECT_0) {
         set_error(t, "WSManSignalShell", 0, L"timed out");
         rc = PSRP_ERR_TRANSPORT;

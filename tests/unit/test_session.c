@@ -3,12 +3,22 @@
 #include <string.h>
 
 /* The key-exchange cases play the server's half, which means RSA-encrypting
- * a session key to the client's public key. That is CNG, and it is the only
- * Windows dependency in this file; the other 47 cases are platform-free and
- * run wherever the library builds. See TODO PSRP-03. */
+ * a session key to the client's public key. That needs a crypto library, and
+ * it is the only platform dependency in this file; every other case is
+ * platform-free. Both backends are covered, so these cases now run wherever
+ * the library builds -- which matters more than it looks: without them
+ * psrp_crypto_import_session_key was only ever handed garbage, and its
+ * success path had no test at all on either platform. */
 #ifdef _WIN32
 #  include <windows.h>
 #  include <bcrypt.h>
+#  define PSRP_TEST_HAVE_CRYPTO 1
+#else
+#  include <openssl/bn.h>
+#  include <openssl/core_names.h>
+#  include <openssl/evp.h>
+#  include <openssl/param_build.h>
+#  include <openssl/rsa.h>
 #  define PSRP_TEST_HAVE_CRYPTO 1
 #endif
 
@@ -978,29 +988,23 @@ PSRP_TEST(host_call_surfaces_its_call_id_and_method)
 #define PSRP_TEST_MODULUS_BYTES 256
 #define PSRP_TEST_SESSION_KEY_BYTES 32
 
-/* Turns the client's CryptoAPI PUBLICKEYBLOB into an ENCRYPTED_SESSION_KEY
- * body carrying `key` encrypted to it. */
-static void make_encrypted_session_key(const psrp_buffer_t *pub_blob,
-                                       const unsigned char *key,
-                                       psrp_buffer_t *out)
+/* RSA-encrypts the session key to the public key in a CryptoAPI
+ * PUBLICKEYBLOB, PKCS#1 v1.5, result big-endian. One per crypto library;
+ * everything either side of this is shared. */
+#ifdef _WIN32
+static void rsa_encrypt_to_blob(const psrp_buffer_t *pub_blob,
+                                const unsigned char *key,
+                                unsigned char *cipher_be)
 {
     unsigned char cng[sizeof(BCRYPT_RSAKEY_BLOB) + 4 + PSRP_TEST_MODULUS_BYTES];
     BCRYPT_RSAKEY_BLOB *hdr = (BCRYPT_RSAKEY_BLOB *)cng;
     unsigned char *exp_be = cng + sizeof *hdr;
     unsigned char *mod_be = exp_be + 4;
-    unsigned char cipher[PSRP_TEST_MODULUS_BYTES];
-    unsigned char simple[12 + PSRP_TEST_MODULUS_BYTES];
     BCRYPT_ALG_HANDLE alg = NULL;
     BCRYPT_KEY_HANDLE k = NULL;
     ULONG produced = 0;
     size_t i;
-    psrp_buffer_t b64;
-    char *xml;
-    size_t xml_len;
 
-    /* The exported blob is a 16-byte header, then the exponent and modulus
-     * little-endian. CNG wants them big-endian. */
-    ASSERT_EQ_SZ(pub_blob->len, (size_t)(16 + 4 + PSRP_TEST_MODULUS_BYTES));
     memset(cng, 0, sizeof cng);
     hdr->Magic = BCRYPT_RSAPUBLIC_MAGIC;
     hdr->BitLength = PSRP_TEST_MODULUS_BYTES * 8;
@@ -1015,11 +1019,79 @@ static void make_encrypted_session_key(const psrp_buffer_t *pub_blob,
     ASSERT_TRUE(BCryptImportKeyPair(alg, NULL, BCRYPT_RSAPUBLIC_BLOB, &k, cng,
                                     (ULONG)sizeof cng, 0) == 0);
     ASSERT_TRUE(BCryptEncrypt(k, (PUCHAR)key, PSRP_TEST_SESSION_KEY_BYTES,
-                              NULL, NULL, 0, cipher, (ULONG)sizeof cipher,
+                              NULL, NULL, 0, cipher_be,
+                              (ULONG)PSRP_TEST_MODULUS_BYTES,
                               &produced, BCRYPT_PAD_PKCS1) == 0);
     ASSERT_EQ_SZ((size_t)produced, (size_t)PSRP_TEST_MODULUS_BYTES);
     BCryptDestroyKey(k);
     BCryptCloseAlgorithmProvider(alg, 0);
+}
+#else
+static void rsa_encrypt_to_blob(const psrp_buffer_t *pub_blob,
+                                const unsigned char *key,
+                                unsigned char *cipher_be)
+{
+    BIGNUM *n = NULL, *e = NULL;
+    OSSL_PARAM_BLD *bld = NULL;
+    OSSL_PARAM *params = NULL;
+    EVP_PKEY_CTX *ctx = NULL;
+    EVP_PKEY *pkey = NULL;
+    size_t produced = PSRP_TEST_MODULUS_BYTES;
+
+    /* BN_lebin2bn reads the little-endian form directly, so the byte
+     * reversal CNG needs has no counterpart here. */
+    n = BN_lebin2bn(pub_blob->data + 20, PSRP_TEST_MODULUS_BYTES, NULL);
+    e = BN_lebin2bn(pub_blob->data + 16, 4, NULL);
+    ASSERT_NOT_NULL(n);
+    ASSERT_NOT_NULL(e);
+
+    bld = OSSL_PARAM_BLD_new();
+    ASSERT_NOT_NULL(bld);
+    ASSERT_TRUE(OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_RSA_N, n) == 1);
+    ASSERT_TRUE(OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_RSA_E, e) == 1);
+    params = OSSL_PARAM_BLD_to_param(bld);
+    ASSERT_NOT_NULL(params);
+
+    ctx = EVP_PKEY_CTX_new_from_name(NULL, "RSA", NULL);
+    ASSERT_NOT_NULL(ctx);
+    ASSERT_TRUE(EVP_PKEY_fromdata_init(ctx) == 1);
+    ASSERT_TRUE(EVP_PKEY_fromdata(ctx, &pkey, EVP_PKEY_PUBLIC_KEY, params) == 1);
+    EVP_PKEY_CTX_free(ctx);
+
+    ctx = EVP_PKEY_CTX_new(pkey, NULL);
+    ASSERT_NOT_NULL(ctx);
+    ASSERT_TRUE(EVP_PKEY_encrypt_init(ctx) == 1);
+    ASSERT_TRUE(EVP_PKEY_CTX_set_rsa_padding(ctx, RSA_PKCS1_PADDING) == 1);
+    ASSERT_TRUE(EVP_PKEY_encrypt(ctx, cipher_be, &produced, key,
+                                 PSRP_TEST_SESSION_KEY_BYTES) == 1);
+    ASSERT_EQ_SZ(produced, (size_t)PSRP_TEST_MODULUS_BYTES);
+
+    EVP_PKEY_CTX_free(ctx);
+    EVP_PKEY_free(pkey);
+    OSSL_PARAM_free(params);
+    OSSL_PARAM_BLD_free(bld);
+    BN_free(e);
+    BN_free(n);
+}
+#endif
+
+/* Turns the client's CryptoAPI PUBLICKEYBLOB into an ENCRYPTED_SESSION_KEY
+ * body carrying `key` encrypted to it. */
+static void make_encrypted_session_key(const psrp_buffer_t *pub_blob,
+                                       const unsigned char *key,
+                                       psrp_buffer_t *out)
+{
+    unsigned char cipher[PSRP_TEST_MODULUS_BYTES];
+    unsigned char simple[12 + PSRP_TEST_MODULUS_BYTES];
+    size_t i;
+    psrp_buffer_t b64;
+    char *xml;
+    size_t xml_len;
+
+    /* The exported blob is a 16-byte header, then the exponent and modulus
+     * little-endian, which is CryptoAPI's convention and neither library's. */
+    ASSERT_EQ_SZ(pub_blob->len, (size_t)(16 + 4 + PSRP_TEST_MODULUS_BYTES));
+    rsa_encrypt_to_blob(pub_blob, key, cipher);
 
     /* SIMPLEBLOB: type 1, version 2, the key algorithm, the exchange
      * algorithm, then the ciphertext little-endian. */

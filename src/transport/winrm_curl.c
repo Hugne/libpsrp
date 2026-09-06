@@ -1313,12 +1313,12 @@ psrp_result_t winrm_send(winrm_session_t *t, const char *stream,
 }
 
 
-psrp_result_t winrm_signal(winrm_session_t *t, winrm_signal_t code)
+psrp_result_t winrm_signal(winrm_session_t *t, const char *code)
 {
     psrp_buffer_t soap, reply;
     psrp_result_t rc;
 
-    if (!t) return PSRP_ERR_INVALID_ARG;
+    if (!t || !code || !*code) return PSRP_ERR_INVALID_ARG;
     if (!t->have_shell || !t->have_command) return PSRP_ERR_STATE;
 
     psrp_buffer_init(&soap);
@@ -1331,9 +1331,7 @@ psrp_result_t winrm_signal(winrm_session_t *t, winrm_signal_t code)
         "</s:Header><s:Body><rsp:Signal CommandId=\"");
     if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap, t->cmd_sel);
     if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap, "\"><rsp:Code>");
-    if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap,
-        code == WINRM_SIGNAL_CTRL_C ? WS_SHELL "/signal/ctrl_c"
-                                    : WS_SHELL "/signal/terminate");
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap, code);
     if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap,
         "</rsp:Code></rsp:Signal></s:Body></s:Envelope>");
     if (rc == PSRP_OK) rc = psrp_buffer_append_u8(&soap, 0);

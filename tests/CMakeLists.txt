@@ -130,6 +130,15 @@ if(NOT WIN32)
   set_tests_properties(interop.test_curl_connect
                        PROPERTIES LABELS "interop" TIMEOUT 300)
 
+  # Stopping a running pipeline: the signal path had no live coverage on this
+  # platform at all, which is what TODO PSRP-38 was waiting for.
+  add_executable(test_curl_stop interop/test_curl_stop.c)
+  target_link_libraries(test_curl_stop PRIVATE psrp psrp_flags)
+  target_include_directories(test_curl_stop PRIVATE ${CMAKE_SOURCE_DIR}/src)
+  add_test(NAME interop.test_curl_stop COMMAND test_curl_stop)
+  set_tests_properties(interop.test_curl_stop
+                       PROPERTIES LABELS "interop" TIMEOUT 300)
+
   add_executable(test_curl_open interop/test_curl_open.c)
   target_link_libraries(test_curl_open PRIVATE psrp psrp_flags)
   target_include_directories(test_curl_open PRIVATE ${CMAKE_SOURCE_DIR}/src)
