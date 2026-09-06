@@ -21,7 +21,7 @@ another pipeline through the same pool:
     server protocolversion 2.2
     running $env:COMPUTERNAME
     pipeline -> Completed
-    output: "CLAUDE"
+    output: "WINBOX01"
     disconnecting
     reconnecting
     running 2 + 2 on the reconnected pool

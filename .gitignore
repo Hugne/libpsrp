@@ -10,3 +10,11 @@ compile_commands.json
 docs-warnings.txt
 reference/doc/
 Testing/
+
+# Local environment: endpoints, credentials, anything specific to one machine
+# or lab. Never committed -- this repository is public. Tests take all of it
+# from the environment (PSRP_CONNECTION / PSRP_USER / PSRP_PASS) instead.
+*.env
+lab/
+local/
+*.local
