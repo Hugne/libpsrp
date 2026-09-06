@@ -25,7 +25,7 @@
  * in one and the send-side fragmenter has to split it. Nothing had exercised
  * that path against a live server before.
  *
- * Opt-in: PSRP_INTEROP=1, with PSRP_USER / PSRP_PASS.
+ * Opt-in: PSRP_INTEROP=1, with PSRP_USER / PSRP_PASS and PSRP_CONNECTION.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -249,6 +249,9 @@ int main(void)
     }
 
     memset(&cfg, 0, sizeof cfg);
+    /* NULL leaves the default, localhost, which was right while this suite
+     * only ever ran on the machine hosting the endpoint. */
+    cfg.connection = getenv("PSRP_CONNECTION");
     cfg.username = getenv("PSRP_USER");
     cfg.password = getenv("PSRP_PASS");
     cfg.operation_timeout_ms = 60000;

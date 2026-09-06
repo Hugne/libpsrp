@@ -14,10 +14,26 @@
  *   test_features            all sections
  *   test_features streams    just that one
  *
- * Opt-in: PSRP_INTEROP=1, with PSRP_USER / PSRP_PASS.
+ * Opt-in: PSRP_INTEROP=1, with PSRP_USER / PSRP_PASS and PSRP_CONNECTION.
  */
-/* Sleep(), and this suite is Windows-gated regardless. */
-#include <windows.h>
+/* This suite needs two things the C standard does not offer -- a sleep, and
+ * on Windows the WSMan enumeration API. Everything else in it is portable,
+ * which is why it now runs on both platforms. */
+#ifdef _WIN32
+#  include <windows.h>
+#  define PSRP_TEST_HAVE_ENUMERATE 1
+static void sleep_ms(unsigned ms) { Sleep(ms); }
+#else
+#  define _POSIX_C_SOURCE 199309L
+#  include <time.h>
+static void sleep_ms(unsigned ms)
+{
+    struct timespec ts;
+    ts.tv_sec = (time_t)(ms / 1000u);
+    ts.tv_nsec = (long)(ms % 1000u) * 1000000L;
+    while (nanosleep(&ts, &ts) == -1) { /* interrupted; finish the wait */ }
+}
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -33,6 +49,7 @@
 /* WS-Management reports a ShellId as a string; PSRP's pool id is a GUID that
  * it puts there. Comparing them means formatting one and matching without
  * regard to case, which is how WinRM returns it. */
+#ifdef PSRP_TEST_HAVE_ENUMERATE
 static bool shell_is(const char *shell_id, const psrp_guid_t *pool)
 {
     char want[PSRP_GUID_BUF_SIZE];
@@ -40,6 +57,7 @@ static bool shell_is(const char *shell_id, const psrp_guid_t *pool)
         return false;
     return _stricmp(shell_id, want) == 0;
 }
+#endif
 
 #include "psrp/psrp_crypto.h"
 
@@ -759,8 +777,8 @@ static int section_stop(psrp_transport_t *t)
         state = pump(s, t, &seen, 30000);
     } while (state >= 0 && !psrp_invocation_state_is_terminal(state));
 
-    printf("  state=%d (%s) output=%d\n", state,
-           psrp_invocation_state_name(state), seen.output);
+    printf("  state=%d (%s) output=%d text=[%.120s]\n", state,
+           psrp_invocation_state_name(state), seen.output, seen.output_text);
     if (state != PSRP_INVOCATION_STOPPED) {
         printf("  FAIL: expected Stopped\n");
         bad = 1;
@@ -1121,8 +1139,10 @@ static int section_connect_new(psrp_transport_t *t)
     psrp_session_t *s1, *s2 = NULL;
     psrp_transport_t *t2 = NULL;
     winrm_config_t cfg;
+#ifdef PSRP_TEST_HAVE_ENUMERATE
     winrm_shell_info_t *shells = NULL;
     size_t shell_count = 0, k;
+#endif
     psrp_guid_t pool_id;
     psrp_buffer_t payload, resp;
     seen_t seen;
@@ -1151,11 +1171,16 @@ static int section_connect_new(psrp_transport_t *t)
         goto done;
     }
 
-    /* Discover it the way a stranger would: by enumeration. */
+    /* The second client's configuration, and on Windows the enumeration's
+     * too, so it is built once here rather than in one branch below. */
     memset(&cfg, 0, sizeof cfg);
+    cfg.connection = getenv("PSRP_CONNECTION");
     cfg.username = getenv("PSRP_USER");
     cfg.password = getenv("PSRP_PASS");
     cfg.operation_timeout_ms = 60000;
+
+#ifdef PSRP_TEST_HAVE_ENUMERATE
+    /* Discover it the way a stranger would: by enumeration. */
     if (winrm_enumerate_shells(&cfg, &shells, &shell_count) != PSRP_OK) {
         printf("  FAIL: enumerate\n");
         goto done;
@@ -1171,6 +1196,14 @@ static int section_connect_new(psrp_transport_t *t)
         printf("  FAIL: the disconnected pool was not enumerated\n");
         goto done;
     }
+#else
+    /* Enumeration is the WSMan COM automation interface and has no port
+     * (PSRP-37), so the discovery step is skipped here. What this section
+     * is really about -- adopting a ShellId nobody in this process created,
+     * connecting to it and running in it -- follows either way. */
+    (void)found;
+    printf("  (skipping enumeration: no WS-Enumerate client here)\n");
+#endif
 
     /* Second client adopts and connects. */
     if (psrp_transport_over_winrm(&cfg, &t2) != PSRP_OK) {
@@ -1265,7 +1298,9 @@ static int section_connect_new(psrp_transport_t *t)
     bad = 0;
 
 done:
+#ifdef PSRP_TEST_HAVE_ENUMERATE
     winrm_shell_info_free_all(shells, shell_count);
+#endif
     if (t2) (void)psrp_transport_close_shell(t2);
     psrp_session_free(s2);
     psrp_transport_free(t2);
@@ -1314,7 +1349,7 @@ static int section_disconnect_running(psrp_transport_t *t)
         goto done;
     }
     printf("  disconnected with the pipeline running\n");
-    Sleep(4500);                        /* let it finish unobserved */
+    sleep_ms(4500);                     /* let it finish unobserved */
 
     if (winrm_reconnect(psrp_transport_session(t)) != PSRP_OK ||
         psrp_session_notify_reconnected(s) != PSRP_OK) {
@@ -1463,6 +1498,9 @@ int main(int argc, char **argv)
     }
 
     memset(&cfg, 0, sizeof cfg);
+    /* NULL leaves the default, localhost, which was right while this suite
+     * only ever ran on the machine hosting the endpoint. */
+    cfg.connection = getenv("PSRP_CONNECTION");
     cfg.username = getenv("PSRP_USER");
     cfg.password = getenv("PSRP_PASS");
     cfg.operation_timeout_ms = 60000;

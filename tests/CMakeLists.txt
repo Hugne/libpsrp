@@ -51,9 +51,41 @@ endif()
 psrp_add_unit_test(test_differential unit/test_differential.c)
 target_include_directories(test_differential PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/unit)
 
-# The interop suites drive a full session, which the curl transport cannot do
-# until run_command and send land (TODO PSRP-35). They are Windows-only for
-# now rather than registered and failing.
+# Two live suites that need nothing from either platform: they reach the
+# server only through the library. They sat inside the Windows block for as
+# long as Windows was the only place a transport existed, which stopped being
+# true and left a gap nobody had reason to look for -- pipeline input and the
+# convenience layer had never once run on Linux.
+#
+# Opt-in on PSRP_INTEROP like every other interop test.
+
+# Pipeline input against a live server. The input direction was implemented
+# and unit-tested but never proven end to end until this existed.
+add_executable(test_input interop/test_input.c)
+target_link_libraries(test_input PRIVATE psrp psrp_flags)
+target_include_directories(test_input PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME interop.test_input COMMAND test_input)
+set_tests_properties(interop.test_input PROPERTIES LABELS "interop" TIMEOUT 600)
+
+# The convenience layer against a live server. Written the way a caller
+# writes it -- no pump loop -- so it also fails if that promise stops holding.
+add_executable(test_client interop/test_client.c)
+target_link_libraries(test_client PRIVATE psrp psrp_flags)
+target_include_directories(test_client PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME interop.test_client COMMAND test_client)
+set_tests_properties(interop.test_client PROPERTIES LABELS "interop" TIMEOUT 600)
+
+# Feature coverage against a live server: the streams, runspace controls, host
+# calls and key exchange, none of which had ever been spoken to a real server.
+add_executable(test_features interop/test_features.c)
+target_link_libraries(test_features PRIVATE psrp psrp_flags)
+target_include_directories(test_features PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME interop.test_features COMMAND test_features)
+set_tests_properties(interop.test_features PROPERTIES LABELS "interop" TIMEOUT 600)
+
+# The suites below still need Windows: two of them call shell enumeration,
+# which is the WSMan COM automation interface and has no port (PSRP-37), and
+# two link Windows libraries directly.
 if(WIN32)
 
 # Live interop test. Labelled so it can be selected or excluded; it skips
@@ -64,22 +96,6 @@ target_include_directories(test_live PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME interop.test_live COMMAND test_live)
 set_tests_properties(interop.test_live PROPERTIES LABELS "interop" TIMEOUT 180)
 
-# Pipeline input against a live server. The input direction was implemented
-# and unit-tested but never proven end to end until this existed.
-add_executable(test_input interop/test_input.c)
-target_link_libraries(test_input PRIVATE psrp psrp_flags)
-target_include_directories(test_input PRIVATE ${CMAKE_SOURCE_DIR}/src)
-add_test(NAME interop.test_input COMMAND test_input)
-set_tests_properties(interop.test_input PROPERTIES LABELS "interop" TIMEOUT 600)
-
-# Feature coverage against a live server: the streams, runspace controls, host
-# calls and key exchange, none of which had ever been spoken to a real server.
-add_executable(test_features interop/test_features.c)
-target_link_libraries(test_features PRIVATE psrp psrp_flags)
-target_include_directories(test_features PRIVATE ${CMAKE_SOURCE_DIR}/src)
-add_test(NAME interop.test_features COMMAND test_features)
-set_tests_properties(interop.test_features PROPERTIES LABELS "interop" TIMEOUT 600)
-
 # Lifecycle stress test. Also interop-labelled and also opt-in: it needs a
 # WinRM service, and it is the only test that can see defects which only appear
 # across repeated cycles.
@@ -89,14 +105,6 @@ target_link_libraries(test_stress PRIVATE psapi)
 target_include_directories(test_stress PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME interop.test_stress COMMAND test_stress)
 set_tests_properties(interop.test_stress PROPERTIES LABELS "interop" TIMEOUT 600)
-
-# The convenience layer against a live server. Written the way a caller
-# writes it -- no pump loop -- so it also fails if that promise stops holding.
-add_executable(test_client interop/test_client.c)
-target_link_libraries(test_client PRIVATE psrp psrp_flags)
-target_include_directories(test_client PRIVATE ${CMAKE_SOURCE_DIR}/src)
-add_test(NAME interop.test_client COMMAND test_client)
-set_tests_properties(interop.test_client PROPERTIES LABELS "interop" TIMEOUT 600)
 
 # The original stdin lab's binary sweep, ported onto PSRP pipeline input.
 # Proves arbitrary bytes survive CLIXML <BA>, fragmentation and reassembly.

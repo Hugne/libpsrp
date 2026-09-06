@@ -125,6 +125,10 @@
 /* NTLM's signature is this size; see note 4 above. */
 #define NTLM_SIGNATURE_BYTES 16
 
+/* Below this a Receive is more round trip than wait; WinRM is also entitled
+ * to reject an operation timeout it considers too small. */
+#define MIN_RECEIVE_TIMEOUT_MS 200u
+
 #define DEFAULT_TIMEOUT_MS 240000u
 #define MAX_ENVELOPE_SIZE  512000
 
@@ -195,6 +199,10 @@ struct winrm_session {
     char cmd_sel[64];   /* the CommandId the server reports back */
     bool have_command;
     bool command_done;
+
+    /* Which stream the next Receive asks for; see the note in winrm_receive.
+     * Only meaningful while a command is running. */
+    bool rx_shell_turn;
     bool disconnected;
 
     /* Bytes decoded from Receive responses that the caller has not drained. */
@@ -638,7 +646,7 @@ static psrp_result_t decrypt_body(winrm_session_t *t, const void *resp,
 
 /* Sends one SOAP request encrypted and returns the decrypted reply. */
 static psrp_result_t soap_call(winrm_session_t *t, const char *soap,
-                               psrp_buffer_t *reply)
+                               psrp_buffer_t *reply, bool is_receive)
 {
     psrp_buffer_t enc;
     long status = 0;
@@ -682,6 +690,21 @@ static psrp_result_t soap_call(winrm_session_t *t, const char *soap,
                  psrp_buffer_append(&t->resp, "", 1) == PSRP_OK)
             body = (const char *)t->resp.data;
 
+        /* WinRM answers a Receive that waited out its OperationTimeout with a
+         * fault, not an empty body: wsman:TimedOut, code 2150858793. That is
+         * the ordinary "nothing arrived yet" reply and the caller asked for
+         * it by naming a timeout, so it is PSRP_ERR_TRUNCATED rather than a
+         * failure. Nothing hit this while every operation timeout was the
+         * session's sixty seconds, because data always arrived first.
+         *
+         * Only for Receive: a Create or a Send that times out really has
+         * failed. */
+        if (body && is_receive &&
+            (strstr(body, "2150858793") || strstr(body, "TimedOut"))) {
+            psrp_buffer_free(&fault);
+            return PSRP_ERR_TRUNCATED;
+        }
+
         if (body) {
             m = strstr(body, "<f:Message");
             if (!m) m = strstr(body, "<s:Text");
@@ -701,8 +724,16 @@ static psrp_result_t soap_call(winrm_session_t *t, const char *soap,
 
 /* The header every WS-Man request carries. `action` selects the operation and
  * `selector` carries the ShellId once one exists. */
+/* `op_timeout_ms` is how long the SERVER may hold this request open before
+ * answering; 0 takes the session's own timeout. It matters for Receive, where
+ * a caller says how long it is prepared to wait and WinRM decides whether to
+ * answer early or hold on -- see the note on winrm_receive. It is clamped to
+ * the session timeout because that is what bounds curl's own wait: an
+ * operation the server may hold longer than curl will wait produces a
+ * client-side abort rather than an empty answer. */
 static psrp_result_t envelope_head(winrm_session_t *t, psrp_buffer_t *b,
-                                   const char *action, bool with_shell)
+                                   const char *action, bool with_shell,
+                                   uint32_t op_timeout_ms)
 {
     char msgid[PSRP_GUID_BUF_SIZE];
     char shell[64];   /* the server's ShellId, which need not be a GUID */
@@ -710,6 +741,9 @@ static psrp_result_t envelope_head(winrm_session_t *t, psrp_buffer_t *b,
     char *head;
     psrp_result_t rc;
     size_t cap = 4096;
+
+    if (!op_timeout_ms || op_timeout_ms > t->timeout_ms)
+        op_timeout_ms = t->timeout_ms;
 
     if (psrp_guid_generate(&id) != PSRP_OK) return PSRP_ERR_INTERNAL;
     if (psrp_guid_format(&id, msgid, sizeof msgid) != PSRP_OK)
@@ -739,10 +773,10 @@ static psrp_result_t envelope_head(winrm_session_t *t, psrp_buffer_t *b,
         "<wsa:MessageID>uuid:%s</wsa:MessageID>"
         "<wsman:Locale xml:lang=\"en-US\" s:mustUnderstand=\"false\"/>"
         "<p:SessionId s:mustUnderstand=\"false\">uuid:%s</p:SessionId>"
-        "<wsman:OperationTimeout>PT%u.000S</wsman:OperationTimeout>"
+        "<wsman:OperationTimeout>PT%u.%03uS</wsman:OperationTimeout>"
         "%s%s%s",
         t->url, action, MAX_ENVELOPE_SIZE, msgid, t->session_id,
-        t->timeout_ms / 1000u,
+        op_timeout_ms / 1000u, op_timeout_ms % 1000u,
         with_shell ? "<wsman:SelectorSet><wsman:Selector Name=\"ShellId\">" : "",
         with_shell ? shell : "",
         with_shell ? "</wsman:Selector></wsman:SelectorSet>" : "");
@@ -1062,7 +1096,7 @@ psrp_result_t winrm_shell_create(winrm_session_t *t, const char *shell_id,
     psrp_buffer_init(&soap);
     psrp_buffer_init(&reply);
 
-    rc = envelope_head(t, &soap, WS_XFER "/Create", false);
+    rc = envelope_head(t, &soap, WS_XFER "/Create", false, 0);
     if (rc != PSRP_OK) goto done;
 
     /* The protocolversion option is required and the server faults without
@@ -1083,7 +1117,7 @@ psrp_result_t winrm_shell_create(winrm_session_t *t, const char *shell_id,
     if (rc == PSRP_OK) rc = psrp_buffer_append_u8(&soap, 0);
     if (rc != PSRP_OK) goto done;
 
-    rc = soap_call(t, (const char *)soap.data, &reply);
+    rc = soap_call(t, (const char *)soap.data, &reply, false);
     if (rc != PSRP_OK) goto done;
 
     /* Take the ShellId the server reports rather than the one asked for. It
@@ -1115,8 +1149,21 @@ psrp_result_t winrm_receive(winrm_session_t *t, psrp_buffer_t *out,
     char cmd[64];   /* the server's CommandId, which need not be a GUID */
     psrp_result_t rc;
 
-    (void)timeout_ms;   /* the operation timeout rides in the envelope */
     if (!t || !out) return PSRP_ERR_INVALID_ARG;
+
+    /* The caller's wait becomes the envelope's OperationTimeout, which is the
+     * only thing that bounds it: WinRM holds a Receive open until either data
+     * arrives or that timeout expires, so ignoring the parameter -- as this
+     * did -- turns "wait up to 250ms" into "wait up to the session timeout",
+     * a factor of two hundred. Callers budget in these units. The one that
+     * showed it was a pump loop crediting itself 250ms per call while the
+     * server held each one for a minute, so a pipeline it meant to stop after
+     * a second and a half ran to completion instead.
+     *
+     * Floored, because a timeout of zero asks the server to answer instantly
+     * and turns a pump loop into a spin. */
+    if (timeout_ms && timeout_ms < MIN_RECEIVE_TIMEOUT_MS)
+        timeout_ms = MIN_RECEIVE_TIMEOUT_MS;
 
     /* Anything left over from a previous response goes first. */
     if (t->rx.len) {
@@ -1126,16 +1173,37 @@ psrp_result_t winrm_receive(winrm_session_t *t, psrp_buffer_t *out,
     }
     if (!t->have_shell) return PSRP_ERR_STATE;
 
+    /* A Receive asks for one stream: the shell's, or one command's. Naming
+     * the command as soon as one exists -- which is what this did -- means
+     * every pool-level message after the first pipeline is never asked for,
+     * so RUNSPACE_AVAILABILITY replies, USER_EVENTs and pool-addressed host
+     * calls simply stop arriving. That is TODO PSRP-21, found and fixed once
+     * already in the Windows client, and reintroduced here because a second
+     * transport is a second chance at the same mistake.
+     *
+     * PowerShell's own client keeps two Receives outstanding at once. This
+     * one is synchronous over a single connection, so it alternates instead:
+     * each call asks for the other stream, and a caller's pump loop drains
+     * both. The cost is asking for each half as often, which is why the
+     * caller's timeout had to start working first -- alternating while every
+     * Receive blocks for the session timeout would be worse than the bug.
+     *
+     * Only while a command is running; before and after, the shell stream is
+     * the only one there is. */
     cmd[0] = '\0';
-    if (t->have_command) snprintf(cmd, sizeof cmd, "%s", t->cmd_sel);
+    if (t->have_command) {
+        if (!t->rx_shell_turn) snprintf(cmd, sizeof cmd, "%s", t->cmd_sel);
+        t->rx_shell_turn = !t->rx_shell_turn;
+    }
 
     psrp_buffer_init(&soap);
     psrp_buffer_init(&reply);
 
-    rc = envelope_head(t, &soap, WS_SHELL "/Receive", true);
+    rc = envelope_head(t, &soap, WS_SHELL "/Receive", true,
+                       timeout_ms);
     if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap,
         "</s:Header><s:Body><rsp:Receive><rsp:DesiredStream");
-    if (rc == PSRP_OK && t->have_command) {
+    if (rc == PSRP_OK && cmd[0]) {
         rc = psrp_buffer_append_str(&soap, " CommandId=\"");
         if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap, cmd);
         if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap, "\"");
@@ -1145,7 +1213,7 @@ psrp_result_t winrm_receive(winrm_session_t *t, psrp_buffer_t *out,
     if (rc == PSRP_OK) rc = psrp_buffer_append_u8(&soap, 0);
     if (rc != PSRP_OK) goto done;
 
-    rc = soap_call(t, (const char *)soap.data, &reply);
+    rc = soap_call(t, (const char *)soap.data, &reply, true);
     if (rc != PSRP_OK) goto done;
 
     rc = collect_streams(t, (const char *)reply.data, reply.len, out);
@@ -1170,11 +1238,11 @@ psrp_result_t winrm_shell_delete(winrm_session_t *t)
     psrp_buffer_init(&soap);
     psrp_buffer_init(&reply);
 
-    rc = envelope_head(t, &soap, WS_XFER "/Delete", true);
+    rc = envelope_head(t, &soap, WS_XFER "/Delete", true, 0);
     if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap,
         "</s:Header><s:Body/></s:Envelope>");
     if (rc == PSRP_OK) rc = psrp_buffer_append_u8(&soap, 0);
-    if (rc == PSRP_OK) rc = soap_call(t, (const char *)soap.data, &reply);
+    if (rc == PSRP_OK) rc = soap_call(t, (const char *)soap.data, &reply, false);
 
     /* Closed exactly once, whatever the server answered. */
     t->have_shell = false;
@@ -1234,7 +1302,7 @@ static psrp_result_t send_on_stream(winrm_session_t *t, const char *stream,
     psrp_buffer_init(&reply);
 
     rc = psrp_base64_encode_buf(&b64, data, len);
-    if (rc == PSRP_OK) rc = envelope_head(t, &soap, WS_SHELL "/Send", true);
+    if (rc == PSRP_OK) rc = envelope_head(t, &soap, WS_SHELL "/Send", true, 0);
     if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap,
         "</s:Header><s:Body><rsp:Send><rsp:Stream Name=\"");
     if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap, stream);
@@ -1249,7 +1317,7 @@ static psrp_result_t send_on_stream(winrm_session_t *t, const char *stream,
     if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap,
         "</rsp:Stream></rsp:Send></s:Body></s:Envelope>");
     if (rc == PSRP_OK) rc = psrp_buffer_append_u8(&soap, 0);
-    if (rc == PSRP_OK) rc = soap_call(t, (const char *)soap.data, &reply);
+    if (rc == PSRP_OK) rc = soap_call(t, (const char *)soap.data, &reply, false);
 
     psrp_buffer_free(&soap);
     psrp_buffer_free(&b64);
@@ -1275,7 +1343,7 @@ psrp_result_t winrm_command(winrm_session_t *t, const char *command_id,
     psrp_buffer_init(&reply);
 
     rc = psrp_base64_encode_buf(&b64, arguments, len);
-    if (rc == PSRP_OK) rc = envelope_head(t, &soap, WS_SHELL "/Command", true);
+    if (rc == PSRP_OK) rc = envelope_head(t, &soap, WS_SHELL "/Command", true, 0);
     if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap,
         "</s:Header><s:Body><rsp:CommandLine CommandId=\"");
     if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap, command_id);
@@ -1290,7 +1358,7 @@ psrp_result_t winrm_command(winrm_session_t *t, const char *command_id,
     if (rc == PSRP_OK) rc = psrp_buffer_append_u8(&soap, 0);
     if (rc != PSRP_OK) goto done;
 
-    rc = soap_call(t, (const char *)soap.data, &reply);
+    rc = soap_call(t, (const char *)soap.data, &reply, false);
     if (rc != PSRP_OK) goto done;
 
     /* As with the ShellId, use the identifier the server reports. */
@@ -1326,7 +1394,7 @@ psrp_result_t winrm_signal(winrm_session_t *t, const char *code)
 
     /* Targeted at the command, so it stops that command rather than the
      * shell. */
-    rc = envelope_head(t, &soap, WS_SHELL "/Signal", true);
+    rc = envelope_head(t, &soap, WS_SHELL "/Signal", true, 0);
     if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap,
         "</s:Header><s:Body><rsp:Signal CommandId=\"");
     if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap, t->cmd_sel);
@@ -1335,7 +1403,7 @@ psrp_result_t winrm_signal(winrm_session_t *t, const char *code)
     if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap,
         "</rsp:Code></rsp:Signal></s:Body></s:Envelope>");
     if (rc == PSRP_OK) rc = psrp_buffer_append_u8(&soap, 0);
-    if (rc == PSRP_OK) rc = soap_call(t, (const char *)soap.data, &reply);
+    if (rc == PSRP_OK) rc = soap_call(t, (const char *)soap.data, &reply, false);
 
     psrp_buffer_free(&soap);
     psrp_buffer_free(&reply);
@@ -1372,7 +1440,7 @@ psrp_result_t winrm_disconnect(winrm_session_t *t, uint32_t idle_timeout_ms)
                  "<rsp:IdleTimeOut>PT%u.%03uS</rsp:IdleTimeOut>",
                  idle_timeout_ms / 1000u, idle_timeout_ms % 1000u);
 
-    rc = envelope_head(t, &soap, WS_SHELL "/Disconnect", true);
+    rc = envelope_head(t, &soap, WS_SHELL "/Disconnect", true, 0);
     if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap,
         "</s:Header><s:Body><rsp:Disconnect>");
     if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap, idle);
@@ -1381,7 +1449,7 @@ psrp_result_t winrm_disconnect(winrm_session_t *t, uint32_t idle_timeout_ms)
     if (rc == PSRP_OK) rc = psrp_buffer_append_u8(&soap, 0);
     if (rc != PSRP_OK) goto done;
 
-    rc = soap_call(t, (const char *)soap.data, &reply);
+    rc = soap_call(t, (const char *)soap.data, &reply, false);
     if (rc == PSRP_OK) t->disconnected = true;
 
 done:
@@ -1402,13 +1470,13 @@ psrp_result_t winrm_reconnect(winrm_session_t *t)
     psrp_buffer_init(&soap);
     psrp_buffer_init(&reply);
 
-    rc = envelope_head(t, &soap, WS_SHELL "/Reconnect", true);
+    rc = envelope_head(t, &soap, WS_SHELL "/Reconnect", true, 0);
     if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap,
         "</s:Header><s:Body></s:Body></s:Envelope>");
     if (rc == PSRP_OK) rc = psrp_buffer_append_u8(&soap, 0);
     if (rc != PSRP_OK) goto done;
 
-    rc = soap_call(t, (const char *)soap.data, &reply);
+    rc = soap_call(t, (const char *)soap.data, &reply, false);
     if (rc != PSRP_OK) goto done;
     t->disconnected = false;
 
@@ -1442,7 +1510,7 @@ psrp_result_t winrm_connect(winrm_session_t *t, const char *shell_id,
      * exactly. */
     snprintf(t->shell_sel, sizeof t->shell_sel, "%s", shell_id);
 
-    rc = envelope_head(t, &soap, WS_SHELL "/Connect", true);
+    rc = envelope_head(t, &soap, WS_SHELL "/Connect", true, 0);
     if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap,
         "</s:Header><s:Body><rsp:Connect>");
     /* No OptionSet, unlike a Create: see TODO PSRP-25. Any option sent with
@@ -1455,7 +1523,7 @@ psrp_result_t winrm_connect(winrm_session_t *t, const char *shell_id,
     if (rc == PSRP_OK) rc = psrp_buffer_append_u8(&soap, 0);
     if (rc != PSRP_OK) goto done;
 
-    rc = soap_call(t, (const char *)soap.data, &reply);
+    rc = soap_call(t, (const char *)soap.data, &reply, false);
     if (rc != PSRP_OK) goto done;
 
     if (response_content) {
