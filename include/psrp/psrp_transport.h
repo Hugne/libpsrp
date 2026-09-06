@@ -1,22 +1,25 @@
 /** @file
- * psrp_transport.h - moving PSRP bytes, whatever carries them.
+ * psrp_transport.h - what the protocol core needs from the transport.
  *
  * The protocol core does no I/O. This is the contract it needs from whatever
  * does: a way to open a session, start a pipeline, push bytes, pull bytes, and
- * shut down. Nothing here knows how those bytes travel.
+ * shut down.
  *
- * Constructing a transport is deliberately NOT part of this header, because
- * every carrier needs different things to be constructed -- an endpoint and
- * credentials for WinRM, a host and key for SSH. `psrp_winrm.h` has the WinRM
- * constructor and the operations only WinRM can perform. A caller includes
- * the one it is using; everything after construction is the same either way.
+ * The split is by PLATFORM, not by carrier. WS-Management is the only carrier
+ * this library will ever speak: the point of the Linux build is to reach
+ * Windows machines, which is what WinRM is for. What differs between the two
+ * builds is who provides it -- Windows has a WSMan client in the OS, and
+ * elsewhere there is nothing, so it has to be built.
  *
- * The vocabulary here is WS-Management's, because that is the only carrier
- * implemented: a "shell" is a session and a "command" is a pipeline. PSRP
- * over SSH, which PowerShell also speaks, has neither -- it is a plain byte
- * stream. Renaming for a transport that does not exist yet would be inventing
- * an abstraction on speculation, so the names stay until there is a second
- * carrier to name them against.
+ * Construction is therefore in `psrp_winrm.h` rather than here, along with
+ * the operations that have no equivalent in the protocol itself. What is left
+ * in this header is what the sans-IO core actually consumes, which is worth
+ * stating separately because it is a much smaller surface than WinRM's and
+ * the core depends on none of the rest.
+ *
+ * The vocabulary is WS-Management's throughout -- a "shell" is a session, a
+ * "command" is a pipeline -- and stays that way. There is no second carrier
+ * coming to name it against, so the names are settled rather than deferred.
  *
  * The two implementations are selected at build time, never both at once,
  * exactly as the XML and crypto backends are:
