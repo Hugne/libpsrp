@@ -78,6 +78,11 @@ static void drain_events(psrp_session_t *s)
     while (psrp_session_next_event(s, &e) == PSRP_OK) psrp_event_free(&e);
 }
 
+#ifdef _WIN32
+#  define PSRP_TEST_HAVE_ENUMERATE 1
+#endif
+
+#ifdef PSRP_TEST_HAVE_ENUMERATE
 /* WS-Management reports a ShellId as a string; PSRP's pool id is a GUID that
  * it puts there. Comparing them means formatting one and matching without
  * regard to case, which is how WinRM returns it. */
@@ -88,6 +93,7 @@ static bool shell_is(const char *shell_id, const psrp_guid_t *pool)
         return false;
     return _stricmp(shell_id, want) == 0;
 }
+#endif
 
 int main(void)
 {
@@ -191,7 +197,11 @@ int main(void)
 
     /* 5. Enumerate the server's shells (3.1.4.10.1). Our own pool is open, so
      *    it must be in the list, and its ShellId must be our pool id: that is
-     *    the identifier another client would use to connect to it. */
+     *    the identifier another client would use to connect to it.
+     *
+     *    Windows only: enumeration is the WSMan COM automation interface and
+     *    has no port yet (PSRP-37). Everything else here is portable. */
+#ifdef PSRP_TEST_HAVE_ENUMERATE
     {
         winrm_shell_info_t *shells = NULL;
         size_t shell_count = 0, k;
@@ -216,6 +226,9 @@ int main(void)
             goto done;
         }
     }
+#else
+    printf("skipping enumeration: no WS-Enumerate client here\n");
+#endif
 
     /* 6. Disconnect and come back (3.1.4.9, 3.1.4.10.2). The shell keeps
      *    running on the server in between, so this is the one part of the

@@ -29,8 +29,15 @@
  * Opt-in like the other interop tests: PSRP_INTEROP=1, with PSRP_USER /
  * PSRP_PASS / PSRP_CONNECTION.
  */
-#include <windows.h>
-#include <bcrypt.h>
+/* SHA-256 over the bytes that went out, to be compared with what PowerShell
+ * computed over what it received. One implementation per platform; a digest
+ * is the only thing either library is asked for. */
+#ifdef _WIN32
+#  include <windows.h>
+#  include <bcrypt.h>
+#else
+#  include <openssl/sha.h>
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -76,14 +83,35 @@ static void fill_payload(unsigned char *p, size_t n)
     for (i = 0; i < n; i++) p[i] = (unsigned char)((i * 13 + 7) & 0xFF);
 }
 
-/* Uppercase hex SHA256, matching what the script's BitConverter produces. */
+/* Uppercase hex, matching what the script's BitConverter produces. */
+static void hex32(const unsigned char *digest, char out[65])
+{
+    static const char *hex = "0123456789ABCDEF";
+    int i;
+
+    for (i = 0; i < 32; i++) {
+        out[i * 2] = hex[digest[i] >> 4];
+        out[i * 2 + 1] = hex[digest[i] & 0x0F];
+    }
+    out[64] = 0;
+}
+
+#ifndef _WIN32
+static int sha256_hex(const void *data, size_t n, char out[65])
+{
+    unsigned char digest[32];
+
+    if (!SHA256((const unsigned char *)data, n, digest)) return 0;
+    hex32(digest, out);
+    return 1;
+}
+#else
 static int sha256_hex(const void *data, size_t n, char out[65])
 {
     BCRYPT_ALG_HANDLE alg = NULL;
     BCRYPT_HASH_HANDLE h = NULL;
     unsigned char digest[32];
-    static const char *hex = "0123456789ABCDEF";
-    int i, ok = 0;
+    int ok = 0;
 
     if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, NULL, 0) != 0)
         return 0;
@@ -93,17 +121,14 @@ static int sha256_hex(const void *data, size_t n, char out[65])
     if (BCryptCreateHash(alg, &h, NULL, 0, NULL, 0, 0) == 0 &&
         BCryptHashData(h, (PUCHAR)data, (ULONG)n, 0) == 0 &&
         BCryptFinishHash(h, digest, sizeof digest, 0) == 0) {
-        for (i = 0; i < 32; i++) {
-            out[i * 2] = hex[digest[i] >> 4];
-            out[i * 2 + 1] = hex[digest[i] & 0x0F];
-        }
-        out[64] = '\0';
+        hex32(digest, out);
         ok = 1;
     }
     if (h) BCryptDestroyHash(h);
     BCryptCloseAlgorithmProvider(alg, 0);
     return ok;
 }
+#endif
 
 /* Pushes whatever the session has queued out over the transport. */
 static int flush(psrp_session_t *s, psrp_transport_t *t)
@@ -153,7 +178,8 @@ static int pump(psrp_session_t *s, psrp_transport_t *t, psrp_buffer_t *text,
         if (waited >= timeout_ms) return -2;
 
         psrp_buffer_init(&chunk);
-        if (psrp_transport_receive(t, &chunk, slice) == PSRP_OK && chunk.len)
+        if (psrp_transport_receive(t, &chunk, (uint32_t)slice) == PSRP_OK &&
+            chunk.len)
             (void)psrp_session_receive(s, chunk.data, chunk.len);
         psrp_buffer_free(&chunk);
         waited += slice;

@@ -83,10 +83,18 @@ target_include_directories(test_features PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME interop.test_features COMMAND test_features)
 set_tests_properties(interop.test_features PROPERTIES LABELS "interop" TIMEOUT 600)
 
-# The suites below still need Windows: two of them call shell enumeration,
-# which is the WSMan COM automation interface and has no port (PSRP-37), and
-# two link Windows libraries directly.
+# Lifecycle stress test. Also interop-labelled and also opt-in: it needs a
+# WinRM service, and it is the only test that can see defects which only
+# appear across repeated cycles. It counts handles, which means psapi on
+# Windows and /proc/self/fd elsewhere.
+add_executable(test_stress interop/test_stress.c)
+target_link_libraries(test_stress PRIVATE psrp psrp_flags)
 if(WIN32)
+  target_link_libraries(test_stress PRIVATE psapi)
+endif()
+target_include_directories(test_stress PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME interop.test_stress COMMAND test_stress)
+set_tests_properties(interop.test_stress PROPERTIES LABELS "interop" TIMEOUT 600)
 
 # Live interop test. Labelled so it can be selected or excluded; it skips
 # itself unless PSRP_INTEROP=1, so the default run needs no WinRM.
@@ -96,23 +104,23 @@ target_include_directories(test_live PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME interop.test_live COMMAND test_live)
 set_tests_properties(interop.test_live PROPERTIES LABELS "interop" TIMEOUT 180)
 
-# Lifecycle stress test. Also interop-labelled and also opt-in: it needs a
-# WinRM service, and it is the only test that can see defects which only appear
-# across repeated cycles.
-add_executable(test_stress interop/test_stress.c)
-target_link_libraries(test_stress PRIVATE psrp psrp_flags)
-target_link_libraries(test_stress PRIVATE psapi)
-target_include_directories(test_stress PRIVATE ${CMAKE_SOURCE_DIR}/src)
-add_test(NAME interop.test_stress COMMAND test_stress)
-set_tests_properties(interop.test_stress PROPERTIES LABELS "interop" TIMEOUT 600)
-
 # The original stdin lab's binary sweep, ported onto PSRP pipeline input.
 # Proves arbitrary bytes survive CLIXML <BA>, fragmentation and reassembly.
+# It hashes what it sent, which is bcrypt on Windows and OpenSSL elsewhere --
+# the latter comes with the library.
 add_executable(test_binary_roundtrip interop/test_binary_roundtrip.c)
-target_link_libraries(test_binary_roundtrip PRIVATE psrp psrp_flags bcrypt)
+target_link_libraries(test_binary_roundtrip PRIVATE psrp psrp_flags)
+if(WIN32)
+  target_link_libraries(test_binary_roundtrip PRIVATE bcrypt)
+endif()
 target_include_directories(test_binary_roundtrip PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME interop.test_binary_roundtrip COMMAND test_binary_roundtrip)
 set_tests_properties(interop.test_binary_roundtrip PROPERTIES LABELS "interop" TIMEOUT 600)
+
+# The suites below still need Windows: two of them call shell enumeration,
+# which is the WSMan COM automation interface and has no port (PSRP-37), and
+# two link Windows libraries directly.
+if(WIN32)
 
 endif()  # WIN32: interop suites
 

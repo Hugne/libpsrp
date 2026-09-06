@@ -17,12 +17,9 @@
  *      connection Event for about a minute per discarded session (TODO
  *      PSRP-14) -- which is why only the reuse case is asserted here.
  *
- * Opt-in like the other interop tests: PSRP_INTEROP=1, with PSRP_USER and
- * PSRP_PASS for credentials. PSRP_STRESS_CYCLES raises the count for a soak.
+ * Opt-in like the other interop tests: PSRP_INTEROP=1, with PSRP_CONNECTION,
+ * PSRP_USER and PSRP_PASS. PSRP_STRESS_CYCLES raises the count for a soak.
  */
-#include <windows.h>
-#include <psapi.h>
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,12 +28,36 @@
 #include "psrp/psrp_session.h"
 #include "psrp/psrp_transport.h"
 
-static DWORD handle_count(void)
+/* What "a handle" means, per platform. The point of counting them is the
+ * same either way: a lifecycle that leaks one per cycle shows up as a slope,
+ * and nothing else in the suite can see that. */
+#ifdef _WIN32
+#  include <windows.h>
+#  include <psapi.h>
+static unsigned long handle_count(void)
 {
     DWORD h = 0;
     GetProcessHandleCount(GetCurrentProcess(), &h);
-    return h;
+    return (unsigned long)h;
 }
+#else
+#  include <dirent.h>
+static unsigned long handle_count(void)
+{
+    /* An open descriptor is the POSIX handle, and the one a transport built
+     * on sockets and files would leak. */
+    DIR *d = opendir("/proc/self/fd");
+    unsigned long n = 0;
+    struct dirent *e;
+
+    if (!d) return 0;
+    while ((e = readdir(d)) != NULL)
+        if (e->d_name[0] != '.') n++;
+    closedir(d);
+    /* The directory handle itself is open while it is counted. */
+    return n ? n - 1 : 0;
+}
+#endif
 
 /* Pumps until `want` is seen, or gives up. Returns the event's state, or -1. */
 static int pump(psrp_session_t *s, psrp_transport_t *t, psrp_event_kind_t want,
@@ -136,7 +157,7 @@ int main(void)
     int cycles = cycles_env ? atoi(cycles_env) : 25;
     int status = 1;
     int i;
-    DWORD before, after;
+    unsigned long before, after;
 
     if (!enabled || strcmp(enabled, "1") != 0) {
         printf("skipped: set PSRP_INTEROP=1 to run the stress test\n");
@@ -145,6 +166,7 @@ int main(void)
     if (cycles < 2) cycles = 2;
 
     memset(&cfg, 0, sizeof cfg);
+    cfg.connection = getenv("PSRP_CONNECTION");
     cfg.username = getenv("PSRP_USER");
     cfg.password = getenv("PSRP_PASS");
     cfg.operation_timeout_ms = 60000;
