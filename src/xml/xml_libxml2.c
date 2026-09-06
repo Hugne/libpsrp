@@ -33,6 +33,9 @@ typedef struct {
 
 struct psrp_xml_reader {
     xmlTextReaderPtr r;
+    /* The global handler this reader displaced, put back when it is freed. */
+    xmlGenericErrorFunc saved_generic;
+    void *saved_generic_ctx;
     char *name;          /* current element's local name, owned */
     char *value;         /* current text node's value, owned */
     size_t value_len;
@@ -107,6 +110,22 @@ static bool is_blank(const char *s)
     return true;
 }
 
+/* The GLOBAL channel, which is the only one some diagnostics travel on.
+ *
+ * libxml2's encoding layer reports through xmlEncodingErr, which calls
+ * __xmlRaiseError with every handler argument NULL and no parser context:
+ *
+ *     __xmlRaiseError(NULL, NULL, NULL, NULL, NULL, XML_FROM_I18N, ...)
+ *
+ * With no context there is no reader to consult, so neither the parser flags
+ * nor a reader-level handler can suppress it -- it falls through to the
+ * global handler and onto the caller's stderr. That is how "input conversion
+ * failed due to input error" escaped both earlier attempts (TODO PSRP-49). */
+static void swallow_generic(void *ctx, const char *msg, ...)
+{
+    (void)ctx; (void)msg;
+}
+
 /* libxml2 prints to stderr when no handler is installed. This one exists to
  * make sure one always is; the caller is told about malformed input through
  * the return code.
@@ -145,10 +164,23 @@ psrp_result_t psrp_xml_reader_create(const void *utf8, size_t n,
      * -- it is what a hostile or broken server sends -- and the caller learns
      * about it from PSRP_ERR_XML, not from text appearing on their terminal.
      * XmlLite is silent, and the two backends have to behave alike. */
+    /* Installed BEFORE the reader exists, because the encoding layer can
+     * report while the reader is still being built, and restored when the
+     * reader is freed. Saving what was there keeps this from stealing the
+     * handler an embedding application installed; libxml2 keeps it per
+     * thread, so this does not reach across threads either. */
+    r->saved_generic = xmlGenericError;
+    r->saved_generic_ctx = xmlGenericErrorContext;
+    xmlSetGenericErrorFunc(NULL, swallow_generic);
+
     r->r = xmlReaderForMemory((const char *)utf8, (int)n, NULL, "UTF-8",
                               XML_PARSE_NONET | XML_PARSE_NOERROR |
                               XML_PARSE_NOWARNING);
-    if (!r->r) { free(r); return PSRP_ERR_XML; }
+    if (!r->r) {
+        xmlSetGenericErrorFunc(r->saved_generic_ctx, r->saved_generic);
+        free(r);
+        return PSRP_ERR_XML;
+    }
 
     /* The flags above are not enough on their own, which took a fuzz target
      * feeding NUL bytes on an older libxml2 to show: an ENCODING error is
@@ -171,6 +203,7 @@ void psrp_xml_reader_free(psrp_xml_reader_t *r)
 {
     if (!r) return;
     if (r->r) xmlFreeTextReader(r->r);
+    xmlSetGenericErrorFunc(r->saved_generic_ctx, r->saved_generic);
     drop_attrs(r);
     free(r->name);
     free(r->value);

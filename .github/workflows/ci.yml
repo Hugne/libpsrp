@@ -2,7 +2,9 @@ name: ci
 
 on:
   push:
-    branches: [master]
+    # wip/xml-silence is here so the change can be proved on the runner
+    # without master carrying the risk; it comes out before the merge.
+    branches: [master, wip/xml-silence]
   pull_request:
   workflow_dispatch:
 
