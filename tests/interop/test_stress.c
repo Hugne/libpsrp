@@ -29,7 +29,7 @@
 
 #include "psrp/psrp.h"
 #include "psrp/psrp_session.h"
-#include "psrp/psrp_winrm.h"
+#include "psrp/psrp_transport.h"
 
 static DWORD handle_count(void)
 {
@@ -131,7 +131,7 @@ int main(void)
 {
     const char *enabled = getenv("PSRP_INTEROP");
     const char *cycles_env = getenv("PSRP_STRESS_CYCLES");
-    psrp_wsman_config_t cfg;
+    winrm_config_t cfg;
     psrp_transport_t *t = NULL;
     int cycles = cycles_env ? atoi(cycles_env) : 25;
     int status = 1;
@@ -149,7 +149,7 @@ int main(void)
     cfg.password = getenv("PSRP_PASS");
     cfg.operation_timeout_ms = 60000;
 
-    if (psrp_wsman_transport_create(&cfg, &t) != PSRP_OK) {
+    if (psrp_transport_over_winrm(&cfg, &t) != PSRP_OK) {
         printf("FAIL: transport create: %s\n", psrp_transport_last_error(t));
         goto done;
     }

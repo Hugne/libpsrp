@@ -14,7 +14,7 @@
 
 #include "psrp/psrp.h"
 #include "psrp/psrp_session.h"
-#include "psrp/psrp_winrm.h"
+#include "psrp/psrp_transport.h"
 #include "psrp/psrp_records.h"
 
 /* Pumps the transport into the session until `want` is seen or time runs out.
@@ -78,13 +78,24 @@ static void drain_events(psrp_session_t *s)
     while (psrp_session_next_event(s, &e) == PSRP_OK) psrp_event_free(&e);
 }
 
+/* WS-Management reports a ShellId as a string; PSRP's pool id is a GUID that
+ * it puts there. Comparing them means formatting one and matching without
+ * regard to case, which is how WinRM returns it. */
+static bool shell_is(const char *shell_id, const psrp_guid_t *pool)
+{
+    char want[PSRP_GUID_BUF_SIZE];
+    if (!shell_id || psrp_guid_format(pool, want, sizeof want) != PSRP_OK)
+        return false;
+    return _stricmp(shell_id, want) == 0;
+}
+
 int main(void)
 {
     const char *enabled = getenv("PSRP_INTEROP");
     const char *user = getenv("PSRP_USER");
     const char *pass = getenv("PSRP_PASS");
     const char *conn = getenv("PSRP_CONNECTION");
-    psrp_wsman_config_t cfg;
+    winrm_config_t cfg;
     psrp_transport_t *t = NULL;
     psrp_session_t *s = NULL;
     psrp_command_t *cmd = NULL;
@@ -108,7 +119,7 @@ int main(void)
     psrp_buffer_init(&out_text);
 
     printf("connecting as %s\n", user ? user : "<current user>");
-    if (psrp_wsman_transport_create(&cfg, &t) != PSRP_OK) {
+    if (psrp_transport_over_winrm(&cfg, &t) != PSRP_OK) {
         printf("FAIL: transport create: %s\n", psrp_transport_last_error(t));
         goto done;
     }
@@ -182,24 +193,24 @@ int main(void)
      *    it must be in the list, and its ShellId must be our pool id: that is
      *    the identifier another client would use to connect to it. */
     {
-        psrp_shell_info_t *shells = NULL;
+        winrm_shell_info_t *shells = NULL;
         size_t shell_count = 0, k;
         bool found = false;
 
-        if (psrp_wsman_enumerate_shells(&cfg, &shells, &shell_count)
+        if (winrm_enumerate_shells(&cfg, &shells, &shell_count)
             != PSRP_OK) {
             printf("FAIL: enumerate shells\n");
             goto done;
         }
         for (k = 0; k < shell_count; k++) {
-            if (psrp_guid_equal(&shells[k].shell_id, psrp_session_pool_id(s))) {
+            if (shell_is(shells[k].shell_id, psrp_session_pool_id(s))) {
                 found = true;
                 printf("enumerated our pool: state %s\n",
                        shells[k].state ? shells[k].state : "<none>");
             }
         }
         printf("server reports %zu shell(s)\n", shell_count);
-        psrp_shell_info_free_all(shells, shell_count);
+        winrm_shell_info_free_all(shells, shell_count);
         if (!found) {
             printf("FAIL: our own pool was not in the enumeration\n");
             goto done;
@@ -210,7 +221,7 @@ int main(void)
      *    running on the server in between, so this is the one part of the
      *    protocol that cannot be checked without a real server. */
     printf("disconnecting\n");
-    if (psrp_transport_disconnect(t, 60000) != PSRP_OK) {
+    if (winrm_disconnect(psrp_transport_session(t), 60000) != PSRP_OK) {
         printf("FAIL: disconnect: %s\n", psrp_transport_last_error(t));
         goto done;
     }
@@ -226,7 +237,7 @@ int main(void)
     }
 
     printf("reconnecting\n");
-    if (psrp_transport_reconnect(t) != PSRP_OK) {
+    if (winrm_reconnect(psrp_transport_session(t)) != PSRP_OK) {
         printf("FAIL: reconnect: %s\n", psrp_transport_last_error(t));
         goto done;
     }

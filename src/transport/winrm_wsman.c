@@ -1,4 +1,11 @@
-/* WSMan transport for PSRP ([MS-PSRP] 3.1.5.3), on the Win32 WSMan API.
+/* A WS-Management client on the Win32 WSMan API ([MS-WSMV]).
+ *
+ * The counterpart to winrm_curl.c. Windows ships a WSMan client in the OS, so
+ * this is a shim over it rather than an implementation: the envelopes, the
+ * authentication and the message encryption are all WsmSvc's problem.
+ *
+ * Nothing here knows what travels on the streams it moves. PSRP's use of this
+ * client lives in psrp_over_winrm.c.
  *
  * The WSMan API is asynchronous: every operation completes on a worker thread
  * via a callback. Each one-shot operation is wrapped in an event-signalled
@@ -11,8 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "psrp/psrp_winrm.h"
-#include "psrp/psrp_fragment.h"
+#include "psrp/winrm.h"
 #include "internal/psrp_codec.h"
 
 /* 3.1.5.3.1 and its appendix. Note the capitalisation: the resource URI
@@ -124,14 +130,14 @@ static void CALLBACK connect_completion(PVOID ctx, DWORD flags,
  * One of these per receive channel. There are two, and that is the point:
  *
  *   shell_rx  targets the shell and lives as long as it does. Everything
- *             addressed to the RunspacePool arrives here: availability
+ *             addressed to the shell arrives here: availability
  *             replies, USER_EVENT, RUNSPACEPOOL_HOST_CALL, key exchange.
  *   cmd_rx    targets the current command and lives as long as it does.
  *             Pipeline output, records and PIPELINE_HOST_CALL arrive here.
  *
  * A single Receive retargeted from the shell to each command in turn was the
  * previous design, and it lost every pool-level message after the first
- * pipeline started: once retargeted it was never returned to the shell, so
+ * command started: once retargeted it was never returned to the shell, so
  * a RUNSPACE_AVAILABILITY asked for after a command had run never arrived,
  * and neither did any forwarded event. PowerShell's own client keeps a shell
  * receive open alongside each command's, which is what this now does.
@@ -202,7 +208,7 @@ static void CALLBACK receive_completion(PVOID ctx, DWORD flags,
 
 /* --------------------------------------------------------- transport ----- */
 
-struct psrp_transport {
+struct winrm_session {
     WSMAN_API_HANDLE api;
     WSMAN_SESSION_HANDLE session;
     WSMAN_SHELL_HANDLE shell;
@@ -222,7 +228,7 @@ struct psrp_transport {
     wchar_t *w_conn;
     HANDLE data_ready;      /* signalled by either channel */
     recv_ctx_t shell_rx;    /* pool-level traffic */
-    recv_ctx_t cmd_rx;      /* the current pipeline's traffic */
+    recv_ctx_t cmd_rx;      /* the current command's traffic */
     DWORD timeout_ms;
     char last_error[640];
 };
@@ -261,7 +267,7 @@ static void rx_destroy(recv_ctx_t *r)
     DeleteCriticalSection(&r->lock);
 }
 
-static void set_error(psrp_transport_t *t, const char *what, DWORD code,
+static void set_error(winrm_session_t *t, const char *what, DWORD code,
                       const wchar_t *detail)
 {
     char narrow[512];
@@ -273,16 +279,16 @@ static void set_error(psrp_transport_t *t, const char *what, DWORD code,
              what, (unsigned long)code, narrow);
 }
 
-const char *psrp_transport_last_error(const psrp_transport_t *t)
+const char *winrm_last_error(const winrm_session_t *t)
 {
     if (!t || t->last_error[0] == '\0') return "no error";
     return t->last_error;
 }
 
-bool psrp_transport_command_done(const psrp_transport_t *t)
+bool winrm_command_done(const winrm_session_t *t)
 {
     bool done;
-    psrp_transport_t *mut = (psrp_transport_t *)t;
+    winrm_session_t *mut = (winrm_session_t *)t;
     if (!t) return true;
     EnterCriticalSection(&mut->cmd_rx.lock);
     done = mut->cmd_rx.done;
@@ -290,17 +296,17 @@ bool psrp_transport_command_done(const psrp_transport_t *t)
     return done;
 }
 
-psrp_result_t psrp_wsman_transport_create(const psrp_wsman_config_t *cfg,
-                                          psrp_transport_t **out)
+psrp_result_t winrm_session_open(const winrm_config_t *cfg,
+                                          winrm_session_t **out)
 {
-    psrp_transport_t *t;
+    winrm_session_t *t;
     PCWSTR connection;
     DWORD rc;
 
     if (!out) return PSRP_ERR_INVALID_ARG;
     *out = NULL;
 
-    t = (psrp_transport_t *)calloc(1, sizeof *t);
+    t = (winrm_session_t *)calloc(1, sizeof *t);
     if (!t) return PSRP_ERR_NOMEM;
 
     t->data_ready = CreateEventW(NULL, FALSE, FALSE, NULL);
@@ -312,7 +318,7 @@ psrp_result_t psrp_wsman_transport_create(const psrp_wsman_config_t *cfg,
     rc = WSManInitialize(WSMAN_FLAG_REQUESTED_API_VERSION_1_1, &t->api);
     if (rc != 0) {
         set_error(t, "WSManInitialize", rc, NULL);
-        psrp_transport_free(t);
+        winrm_session_free(t);
         return PSRP_ERR_TRANSPORT;
     }
 
@@ -321,7 +327,7 @@ psrp_result_t psrp_wsman_transport_create(const psrp_wsman_config_t *cfg,
         t->w_user = wide_dup(cfg->username);
         t->w_pass = wide_dup(cfg->password ? cfg->password : "");
         if (!t->w_user || !t->w_pass) {
-            psrp_transport_free(t);
+            winrm_session_free(t);
             return PSRP_ERR_NOMEM;
         }
         t->auth.userAccount.username = t->w_user;
@@ -330,7 +336,7 @@ psrp_result_t psrp_wsman_transport_create(const psrp_wsman_config_t *cfg,
 
     if (cfg && cfg->connection) {
         t->w_conn = wide_dup(cfg->connection);
-        if (!t->w_conn) { psrp_transport_free(t); return PSRP_ERR_NOMEM; }
+        if (!t->w_conn) { winrm_session_free(t); return PSRP_ERR_NOMEM; }
         connection = t->w_conn;
     } else {
         connection = kDefaultConnection;
@@ -338,7 +344,7 @@ psrp_result_t psrp_wsman_transport_create(const psrp_wsman_config_t *cfg,
     rc = WSManCreateSession(t->api, connection, 0, &t->auth, NULL, &t->session);
     if (rc != 0) {
         set_error(t, "WSManCreateSession", rc, NULL);
-        psrp_transport_free(t);
+        winrm_session_free(t);
         return PSRP_ERR_TRANSPORT;
     }
 
@@ -361,7 +367,7 @@ static void cancel_receive(recv_ctx_t *r)
     r->op = NULL;
 }
 
-static void cancel_both(psrp_transport_t *t)
+static void cancel_both(winrm_session_t *t)
 {
     cancel_receive(&t->cmd_rx);
     cancel_receive(&t->shell_rx);
@@ -389,9 +395,9 @@ static void reset_receive(recv_ctx_t *r)
  * A command belongs to a shell, so this has to happen before the shell goes
  * away. Closing the shell first and the command afterwards leaves the second
  * call operating on a handle whose parent no longer exists, which is what this
- * code used to do: only psrp_transport_free closed the command, and
- * psrp_transport_close_shell ran before it. */
-static void close_command(psrp_transport_t *t)
+ * code used to do: only winrm_session_free closed the command, and
+ * winrm_shell_delete ran before it. */
+static void close_command(winrm_session_t *t)
 {
     async_op_t op;
     WSMAN_SHELL_ASYNC a;
@@ -406,7 +412,7 @@ static void close_command(psrp_transport_t *t)
     t->command = NULL;
 }
 
-void psrp_transport_free(psrp_transport_t *t)
+void winrm_session_free(winrm_session_t *t)
 {
     if (!t) return;
     cancel_both(t);
@@ -446,16 +452,13 @@ void psrp_transport_free(psrp_transport_t *t)
  * case-sensitively: connecting with the lower-case form fails with 0x8033805B,
  * "shell was not found", for a shell enumeration had just listed. PowerShell's
  * own client sends ids in upper case throughout, so this does the same. */
-static psrp_result_t guid_to_wide(const psrp_guid_t *g, wchar_t out[64])
+/* Identifiers arrive as strings; WSMan wants UTF-16. */
+static psrp_result_t id_to_wide(const char *id, wchar_t out[64])
 {
-    char narrow[PSRP_GUID_BUF_SIZE];
-    size_t i;
-    psrp_result_t rc = psrp_guid_format(g, narrow, sizeof narrow);
-    if (rc != PSRP_OK) return rc;
-    for (i = 0; narrow[i]; i++)
-        if (narrow[i] >= 'a' && narrow[i] <= 'f') narrow[i] = (char)(narrow[i] - 32);
-    MultiByteToWideChar(CP_UTF8, 0, narrow, -1, out, 64);
-    return PSRP_OK;
+    int n;
+    if (!id) return PSRP_ERR_INVALID_ARG;
+    n = MultiByteToWideChar(CP_UTF8, 0, id, -1, out, 64);
+    return n > 0 ? PSRP_OK : PSRP_ERR_OVERFLOW;
 }
 
 /* Builds <element xmlns="...powershell">base64</element> as UTF-16: the open
@@ -505,8 +508,8 @@ static psrp_result_t build_open_content(const char *element,
 }
 
 /* Posts a continuous Receive on one channel. `command` is NULL for the
- * shell-level channel and the command handle for the pipeline's. */
-static void post_receive(psrp_transport_t *t, recv_ctx_t *r,
+ * shell-level channel and the command handle for the command's. */
+static void post_receive(winrm_session_t *t, recv_ctx_t *r,
                          WSMAN_COMMAND_HANDLE command)
 {
     static PCWSTR streams[1] = { L"stdout" };
@@ -519,9 +522,9 @@ static void post_receive(psrp_transport_t *t, recv_ctx_t *r,
     WSManReceiveShellOutput(t->shell, command, 0, &desired, &r->async, &r->op);
 }
 
-psrp_result_t psrp_transport_open(psrp_transport_t *t,
-                                  const psrp_guid_t *shell_id,
-                                  const void *payload, size_t len)
+psrp_result_t winrm_shell_create(winrm_session_t *t,
+                                 const char *shell_id,
+                                 const void *payload, size_t len)
 {
     wchar_t shell_id_w[64];
     wchar_t *creation = NULL;
@@ -539,7 +542,7 @@ psrp_result_t psrp_transport_open(psrp_transport_t *t,
 
     if (!t || !shell_id || (len && !payload)) return PSRP_ERR_INVALID_ARG;
 
-    rc = guid_to_wide(shell_id, shell_id_w);
+    rc = id_to_wide(shell_id, shell_id_w);
     if (rc != PSRP_OK) return rc;
     rc = build_open_content("creationXml", payload, len, &creation);
     if (rc != PSRP_OK) return rc;
@@ -597,40 +600,30 @@ psrp_result_t psrp_transport_open(psrp_transport_t *t,
 
 /* Length of the first fragment in `payload`, or 0 if undecodable. 3.1.5.3.3
  * allows only that fragment in the Command's Arguments. */
-static size_t first_fragment_len(const void *payload, size_t len)
-{
-    psrp_reader_t r;
-    psrp_fragment_t f;
-    psrp_reader_init(&r, payload, len);
-    if (psrp_fragment_decode(&r, &f) != PSRP_OK) return 0;
-    return r.pos;
-}
 
-psrp_result_t psrp_transport_run_command(psrp_transport_t *t,
-                                         const psrp_guid_t *command_id,
-                                         const void *payload, size_t len)
+psrp_result_t winrm_command(winrm_session_t *t, const char *command_id,
+                            const char *command_line,
+                            const void *arguments, size_t len)
 {
     wchar_t command_id_w[64];
+    wchar_t *cmdline_w = NULL;
     psrp_buffer_t b64, utf16;
     async_op_t op;
     WSMAN_SHELL_ASYNC async;
     PCWSTR args[1];
     WSMAN_COMMAND_ARG_SET arg_set;
     psrp_result_t rc;
-    size_t first;
 
-    if (!t || !command_id || !payload || len == 0) return PSRP_ERR_INVALID_ARG;
+    if (!t || !command_id) return PSRP_ERR_INVALID_ARG;
+    if (len && !arguments) return PSRP_ERR_INVALID_ARG;
     if (!t->shell) return PSRP_ERR_STATE;
 
-    rc = guid_to_wide(command_id, command_id_w);
+    rc = id_to_wide(command_id, command_id_w);
     if (rc != PSRP_OK) return rc;
-
-    first = first_fragment_len(payload, len);
-    if (first == 0) return PSRP_ERR_MALFORMED;
 
     psrp_buffer_init(&b64);
     psrp_buffer_init(&utf16);
-    rc = psrp_base64_encode_buf(&b64, payload, first);
+    rc = psrp_base64_encode_buf(&b64, arguments, len);
     if (rc == PSRP_OK) rc = psrp_utf8_to_utf16(b64.data, b64.len, &utf16);
     if (rc == PSRP_OK) rc = psrp_buffer_append_u8(&utf16, 0);
     if (rc == PSRP_OK) rc = psrp_buffer_append_u8(&utf16, 0);
@@ -640,27 +633,36 @@ psrp_result_t psrp_transport_run_command(psrp_transport_t *t,
         return rc;
     }
 
-    /* The previous pipeline's receive and handle go first. The shell-level
-     * channel is deliberately untouched: pool-level traffic keeps flowing
-     * while the new command runs. */
-    cancel_receive(&t->cmd_rx);
-    close_command(t);
-
-    op_init(&op);
     args[0] = (PCWSTR)utf16.data;
     arg_set.argsCount = 1;
     arg_set.args = args;
+
+    /* The Win32 client will not accept an empty command line: both
+     * WSManRunShellCommand and its Ex form reject it client-side with
+     * 0x80338180 ("one of the parameters ... is null or zero"). A caller
+     * asking for empty gets a single space, which a real endpoint accepts.
+     * See TODO PSRP-08 -- the limitation is this API's, not the protocol's,
+     * and winrm_curl.c sends the empty element the spec asks for. */
+    {
+        const char *line = (command_line && *command_line) ? command_line : " ";
+        int n = MultiByteToWideChar(CP_UTF8, 0, line, -1, NULL, 0);
+        if (n > 0) {
+            cmdline_w = (wchar_t *)calloc((size_t)n, sizeof *cmdline_w);
+            if (cmdline_w)
+                MultiByteToWideChar(CP_UTF8, 0, line, -1, cmdline_w, n);
+        }
+        if (!cmdline_w) {
+            psrp_buffer_free(&b64);
+            psrp_buffer_free(&utf16);
+            return PSRP_ERR_NOMEM;
+        }
+    }
+
+    op_init(&op);
     async.operationContext = &op;
     async.completionFunction = generic_completion;
-    /* 3.1.5.3.3 says the Command element MUST be empty, with the first
-     * fragment in Arguments. The Win32 WSMan client will not let us do that
-     * literally: an empty command line is rejected client-side with
-     * 0x80338180 ("one of the parameters ... is null or zero"), by both
-     * WSManRunShellCommand and its Ex form. A single space is the closest we
-     * can get, and a real PowerShell endpoint accepts it -- verified by the
-     * live interop test, which runs a pipeline and gets its output back. */
-    WSManRunShellCommandEx(t->shell, 0, command_id_w, L" ", &arg_set, NULL,
-                           &async, &t->command);
+    WSManRunShellCommandEx(t->shell, 0, command_id_w, cmdline_w, &arg_set,
+                           NULL, &async, &t->command);
     if (WaitForSingleObject(op.done, t->timeout_ms) != WAIT_OBJECT_0) {
         set_error(t, "WSManRunShellCommandEx", 0, L"timed out");
         rc = PSRP_ERR_TRANSPORT;
@@ -669,23 +671,20 @@ psrp_result_t psrp_transport_run_command(psrp_transport_t *t,
         rc = PSRP_ERR_TRANSPORT;
     }
     op_destroy(&op);
+    free(cmdline_w);
     psrp_buffer_free(&b64);
     psrp_buffer_free(&utf16);
 
     if (rc == PSRP_OK) {
         reset_receive(&t->cmd_rx);
         post_receive(t, &t->cmd_rx, t->command);
-        /* Fragments beyond the first travel by Send, per 3.1.5.3.3. */
-        if (len > first)
-            rc = psrp_transport_send(t, (const uint8_t *)payload + first,
-                                     len - first);
     }
     return rc;
 }
 
 /* Shared by both streams; PSRP uses "stdin" for data and "pr" for host
  * responses (3.1.5.3.5). */
-static psrp_result_t send_on_stream(psrp_transport_t *t, PCWSTR stream,
+static psrp_result_t send_on_stream(winrm_session_t *t, PCWSTR stream,
                                     const void *data, size_t len)
 {
     async_op_t op;
@@ -719,24 +718,35 @@ static psrp_result_t send_on_stream(psrp_transport_t *t, PCWSTR stream,
     return rc;
 }
 
-psrp_result_t psrp_transport_send(psrp_transport_t *t, const void *data,
-                                  size_t len)
+psrp_result_t winrm_send(winrm_session_t *t, const char *stream,
+                         const void *data, size_t len)
 {
-    return send_on_stream(t, L"stdin", data, len);
+    wchar_t stream_w[32];
+    psrp_result_t rc;
+
+    if (!t || !stream) return PSRP_ERR_INVALID_ARG;
+    rc = id_to_wide(stream, stream_w);
+    if (rc != PSRP_OK) return rc;
+    return send_on_stream(t, stream_w, data, len);
 }
 
-psrp_result_t psrp_transport_send_priority(psrp_transport_t *t,
-                                           const void *data, size_t len)
-{
-    return send_on_stream(t, L"pr", data, len);
-}
 
 /* 3.1.5.3.9 fixes this string, and it is misspelled: "crtl_c", not "ctrl_c".
  * Both occurrences in the spec agree, and PowerShell expects it verbatim.
- * Tidying the typo would silently break pipeline cancellation. */
+ * Tidying the typo would silently break cancellation. */
+/* The code this API is given for "stop the running command".
+ *
+ * It is PowerShell's own signal rather than WS-Management's generic
+ * terminate, and the misspelling is the specification's: MS-PSRP 3.1.5.3.9
+ * really does write "crtl_c". Left exactly as it is because it is what the
+ * live stop test exercises against a real endpoint; the curl client sends
+ * WS-Management's terminate URI for the same request and is likewise
+ * unchanged. Unifying them is not something to do without a server in front
+ * of it. */
 static PCWSTR kSignalTerminate = L"powershell/signal/crtl_c";
+static PCWSTR kSignalCtrlC = L"powershell/signal/crtl_c";
 
-psrp_result_t psrp_transport_stop_pipeline(psrp_transport_t *t)
+psrp_result_t winrm_signal(winrm_session_t *t, winrm_signal_t code)
 {
     async_op_t op;
     WSMAN_SHELL_ASYNC async;
@@ -749,7 +759,10 @@ psrp_result_t psrp_transport_stop_pipeline(psrp_transport_t *t)
     op_init(&op);
     async.operationContext = &op;
     async.completionFunction = generic_completion;
-    WSManSignalShell(t->shell, t->command, 0, kSignalTerminate, &async, &sig);
+    WSManSignalShell(t->shell, t->command, 0,
+                     code == WINRM_SIGNAL_CTRL_C ? kSignalCtrlC
+                                                 : kSignalTerminate,
+                     &async, &sig);
     if (WaitForSingleObject(op.done, t->timeout_ms) != WAIT_OBJECT_0) {
         set_error(t, "WSManSignalShell", 0, L"timed out");
         rc = PSRP_ERR_TRANSPORT;
@@ -765,8 +778,8 @@ psrp_result_t psrp_transport_stop_pipeline(psrp_transport_t *t)
 /* ---------------- disconnect and reconnect (3.1.4.9, 3.1.4.10) --------- */
 
 /* Runs one shell-level async call and reports its outcome. */
-static psrp_result_t run_shell_op(psrp_transport_t *t, const char *what,
-                                  void (*start)(psrp_transport_t *,
+static psrp_result_t run_shell_op(winrm_session_t *t, const char *what,
+                                  void (*start)(winrm_session_t *,
                                                 WSMAN_SHELL_ASYNC *))
 {
     async_op_t op;
@@ -790,7 +803,7 @@ static psrp_result_t run_shell_op(psrp_transport_t *t, const char *what,
 
 /* The idle timeout has to reach the callback somehow and WSMAN_SHELL_ASYNC
  * carries no room for it, so it rides on the transport for the one call. */
-static void start_disconnect(psrp_transport_t *t, WSMAN_SHELL_ASYNC *async)
+static void start_disconnect(winrm_session_t *t, WSMAN_SHELL_ASYNC *async)
 {
     WSMAN_SHELL_DISCONNECT_INFO info;
     info.idleTimeoutMs = t->pending_idle_timeout_ms;
@@ -798,24 +811,24 @@ static void start_disconnect(psrp_transport_t *t, WSMAN_SHELL_ASYNC *async)
                          info.idleTimeoutMs ? &info : NULL, async);
 }
 
-static void start_reconnect(psrp_transport_t *t, WSMAN_SHELL_ASYNC *async)
+static void start_reconnect(winrm_session_t *t, WSMAN_SHELL_ASYNC *async)
 {
     WSManReconnectShell(t->shell, 0, async);
 }
 
-/* Reconnecting the shell does not reattach its commands. A pipeline that ran
+/* Reconnecting the shell does not reattach its commands. A command that ran
  * on while we were away has its output buffered against the command, and
  * that stream stays detached until the command itself is reconnected. Without
  * this, a reconnect after a busy disconnect came back to silence: the pool
- * was fine and the pipeline's output was simply never delivered. PowerShell's
+ * was fine and the command's output was simply never delivered. PowerShell's
  * client reconnects each command after the shell for exactly this reason. */
-static void start_reconnect_command(psrp_transport_t *t,
+static void start_reconnect_command(winrm_session_t *t,
                                     WSMAN_SHELL_ASYNC *async)
 {
     WSManReconnectShellCommand(t->command, 0, async);
 }
 
-psrp_result_t psrp_transport_disconnect(psrp_transport_t *t,
+psrp_result_t winrm_disconnect(winrm_session_t *t,
                                         uint32_t idle_timeout_ms)
 {
     psrp_result_t rc;
@@ -829,7 +842,7 @@ psrp_result_t psrp_transport_disconnect(psrp_transport_t *t,
      * different: it is a standing operation, so cancel it deliberately.
      *
      * The command handle is deliberately kept: a disconnected shell goes on
-     * running its pipeline server-side, which is the whole point, and the
+     * running its command server-side, which is the whole point, and the
      * handle is what a reconnect resumes against. */
     cancel_both(t);
 
@@ -839,7 +852,7 @@ psrp_result_t psrp_transport_disconnect(psrp_transport_t *t,
     return rc;
 }
 
-psrp_result_t psrp_transport_reconnect(psrp_transport_t *t)
+psrp_result_t winrm_reconnect(winrm_session_t *t)
 {
     psrp_result_t rc;
 
@@ -854,7 +867,7 @@ psrp_result_t psrp_transport_reconnect(psrp_transport_t *t)
          * start data flowing again. Post them explicitly. The old code only
          * cleared flags and relied on the next run_command to post one, so
          * pool-level traffic after a reconnect was never listened for unless
-         * a new pipeline happened to follow. */
+         * a new command happened to follow. */
         reset_receive(&t->shell_rx);
         post_receive(t, &t->shell_rx, NULL);
         if (t->command) {
@@ -903,8 +916,8 @@ static psrp_result_t decode_connect_response(const char *xml, size_t n,
     return rc;
 }
 
-psrp_result_t psrp_transport_connect(psrp_transport_t *t,
-                                     const psrp_guid_t *shell_id,
+psrp_result_t winrm_connect(winrm_session_t *t,
+                            const char *shell_id,
                                      const void *payload, size_t len,
                                      psrp_buffer_t *response_payload)
 {
@@ -918,7 +931,7 @@ psrp_result_t psrp_transport_connect(psrp_transport_t *t,
     if (!t || !shell_id || (len && !payload)) return PSRP_ERR_INVALID_ARG;
     if (t->shell) return PSRP_ERR_STATE;
 
-    rc = guid_to_wide(shell_id, shell_id_w);
+    rc = id_to_wide(shell_id, shell_id_w);
     if (rc != PSRP_OK) return rc;
     /* Same wrapper shape as a Create's open content, different element name:
      * 3.1.5.3.14 requires connectXml here, and the plugin will not find the
@@ -941,7 +954,7 @@ psrp_result_t psrp_transport_connect(psrp_transport_t *t,
      * 3.1.5.3.14 lists protocolversion for the Connect, but the pool already
      * exists with a version negotiated at its creation and the server does not
      * need it repeated: a Connect without it succeeds, negotiates, and goes on
-     * to run pipelines. Verified against a live server. */
+     * to run commands. Verified against a live server. */
     WSManConnectShell(t->session, 0, kResourceUri, shell_id_w, NULL, &data,
                       &async, &t->shell);
     if (WaitForSingleObject(op.done, t->timeout_ms) != WAIT_OBJECT_0) {
@@ -976,7 +989,7 @@ psrp_result_t psrp_transport_connect(psrp_transport_t *t,
         /* WSManConnectShell may have produced a handle even though the
          * operation as a whole failed -- the connectResponseXml checks above
          * run after a successful connect. Nulling it without closing would
-         * strand the shell: psrp_transport_free would no longer see it, and
+         * strand the shell: winrm_session_free would no longer see it, and
          * the server would hold the pool until its idle timeout.
          *
          * `op` is deliberately still alive here. On the timeout branch the
@@ -1012,12 +1025,12 @@ psrp_result_t psrp_transport_connect(psrp_transport_t *t,
     return PSRP_OK;
 }
 
-bool psrp_transport_is_disconnected(const psrp_transport_t *t)
+bool winrm_is_disconnected(const winrm_session_t *t)
 {
     return t && t->disconnected;
 }
 
-psrp_result_t psrp_transport_close_shell(psrp_transport_t *t)
+psrp_result_t winrm_shell_delete(winrm_session_t *t)
 {
     async_op_t op;
     WSMAN_SHELL_ASYNC async;
@@ -1081,7 +1094,7 @@ static void drain_channel(recv_ctx_t *r, psrp_buffer_t *out, bool *have,
     LeaveCriticalSection(&r->lock);
 }
 
-psrp_result_t psrp_transport_receive(psrp_transport_t *t, psrp_buffer_t *out,
+psrp_result_t winrm_receive(winrm_session_t *t, psrp_buffer_t *out,
                                      uint32_t timeout_ms)
 {
     DWORD waited = 0;
@@ -1120,7 +1133,7 @@ psrp_result_t psrp_transport_receive(psrp_transport_t *t, psrp_buffer_t *out,
             set_error(t, "WSManReceiveShellOutput", err, detail);
             return PSRP_ERR_TRANSPORT;
         }
-        /* Nothing buffered and the pipeline has finished, or the caller's
+        /* Nothing buffered and the command has finished, or the caller's
          * patience ran out: both are "no data", not a failure. The shell
          * channel never finishes on its own, so with no command in flight
          * this waits out the timeout, which is the right answer for a caller

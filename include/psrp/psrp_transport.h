@@ -1,37 +1,24 @@
 /** @file
- * psrp_transport.h - what the protocol core needs from the transport.
+ * psrp_transport.h - PSRP's use of a WinRM session.
  *
  * The protocol core does no I/O. This is the contract it needs from whatever
- * does: a way to open a session, start a pipeline, push bytes, pull bytes, and
- * shut down.
+ * does: open a session, start a pipeline, push bytes, pull bytes, shut down.
  *
- * The split is by PLATFORM, not by carrier. WS-Management is the only carrier
- * this library will ever speak: the point of the Linux build is to reach
- * Windows machines, which is what WinRM is for. What differs between the two
- * builds is who provides it -- Windows has a WSMan client in the OS, and
- * elsewhere there is nothing, so it has to be built.
+ * PSRP is a construct layered on WS-Management, and the two layers are kept
+ * apart. `winrm.h` is a WS-Management client and knows nothing about
+ * PowerShell -- no runspace pools, no pipelines, no fragments. Everything on
+ * this side of the line is PSRP's: which stream host responses travel on,
+ * that a payload is a sequence of fragments and only the first may ride in
+ * the Command request, that a pipeline identifier is a GUID.
  *
- * Construction is therefore in `psrp_winrm.h` rather than here, along with
- * the operations that have no equivalent in the protocol itself. What is left
- * in this header is what the sans-IO core actually consumes, which is worth
- * stating separately because it is a much smaller surface than WinRM's and
- * the core depends on none of the rest.
- *
- * The vocabulary is WS-Management's throughout -- a "shell" is a session, a
- * "command" is a pipeline -- and stays that way. There is no second carrier
- * coming to name it against, so the names are settled rather than deferred.
- *
- * The two implementations are selected at build time, never both at once,
- * exactly as the XML and crypto backends are:
- *
- *   Windows   transport_wsman.c   a thin shim over the Win32 WSMan client
- *   elsewhere transport_curl.c    HTTP, GSS-API and MS-WSMV encryption, built
- *                                 from parts, because there is no OS client
+ * That division is why this header exists at all rather than the core calling
+ * winrm.h directly. The mapping between the two is small but it is real, and
+ * it belongs in one place: src/transport/psrp_over_winrm.c.
  */
 #ifndef PSRP_TRANSPORT_H
 #define PSRP_TRANSPORT_H
 
-#include "psrp/psrp_buffer.h"
+#include "psrp/winrm.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -39,38 +26,55 @@ extern "C" {
 
 typedef struct psrp_transport psrp_transport_t;
 
-/** Releases the transport, closing the session first if one is open.
+/** Builds a transport over a WinRM session.
+ *
+ * WS-Management is the only carrier this library speaks, so there is one
+ * constructor and it names it. Everything after construction goes through the
+ * calls below, which is the surface the protocol core actually consumes. */
+psrp_result_t psrp_transport_over_winrm(const winrm_config_t *cfg,
+                                        psrp_transport_t **out);
+
+/** The session underneath, for the WinRM-only operations -- disconnect,
+ * reconnect, connect, and asking which authentication mechanism was
+ * negotiated. Remains owned by the transport. */
+winrm_session_t *psrp_transport_session(psrp_transport_t *t);
+
+/** Releases the transport, closing the shell first if one is open.
  * Safe on NULL. */
 void psrp_transport_free(psrp_transport_t *t);
 
-/** Opens a session, carrying psrp_session_open_payload's output with it.
+/** Opens a RunspacePool, carrying psrp_session_open_payload's output as the
+ * shell's open content.
  *
- * Over WinRM this is a wxf:Create whose open content is the payload, base64'd
- * into a `<creationXml>` element, and `shell_id` becomes the WSMan ShellId;
- * pass the RunspacePool GUID so the two id spaces line up, as PowerShell does.
+ * `pool_id` becomes the WinRM ShellId, which is PowerShell's convention: it
+ * lines the two identifier spaces up. WinRM itself does not require it.
  *
- * A transport may be reused: after psrp_transport_close_shell another session
+ * A transport may be reused: after psrp_transport_close_shell another pool
  * can be opened on the same transport, and that is the cheaper way to run
- * several. See TODO PSRP-14 for what a transport per session costs. */
+ * several. See TODO PSRP-14 for what a transport per pool costs. */
 psrp_result_t psrp_transport_open(psrp_transport_t *t,
-                                  const psrp_guid_t *shell_id,
+                                  const psrp_guid_t *pool_id,
                                   const void *payload, size_t len);
 
 /** Starts a pipeline from psrp_session_pipeline_payload's output.
  *
- * `command_id` becomes the pipeline's identifier. Over WinRM only the first
- * fragment may ride in the request (3.1.5.3.3); the implementation splits the
- * payload and sends the remainder itself, so a caller passes the whole thing. */
+ * 3.1.5.3.3 allows only the first fragment to ride in the Command request;
+ * this splits the payload on its first fragment boundary and sends the
+ * remainder on the input stream, so a caller passes the whole thing. Knowing
+ * where that boundary is requires reading a PSRP fragment header, which is
+ * why the split lives on this side of the layer and not in the WinRM
+ * client. */
 psrp_result_t psrp_transport_run_command(psrp_transport_t *t,
-                                         const psrp_guid_t *command_id,
+                                         const psrp_guid_t *pipeline_id,
                                          const void *payload, size_t len);
 
-/** Sends bytes on the ordinary data stream. */
+/** Sends bytes as pipeline input. */
 psrp_result_t psrp_transport_send(psrp_transport_t *t,
                                   const void *data, size_t len);
 
-/** Sends bytes on the priority stream, which 3.1.5.3.5 reserves for host
- * responses. Pair it with psrp_session_take_priority_output. */
+/** Sends bytes as a host response. 3.1.5.3.5 reserves a separate stream for
+ * these so that a host reply cannot queue behind pipeline input. Pair it with
+ * psrp_session_take_priority_output. */
 psrp_result_t psrp_transport_send_priority(psrp_transport_t *t,
                                            const void *data, size_t len);
 
@@ -80,12 +84,11 @@ psrp_result_t psrp_transport_send_priority(psrp_transport_t *t,
 psrp_result_t psrp_transport_receive(psrp_transport_t *t, psrp_buffer_t *out,
                                      uint32_t timeout_ms);
 
-/** Stops the running pipeline. Targeted at the pipeline, so it does not take
- * the session with it (3.1.4.4). */
+/** Stops the running pipeline without taking the pool with it (3.1.4.4). */
 psrp_result_t psrp_transport_stop_pipeline(psrp_transport_t *t);
 
-/** Closes the session (3.1.4.2). psrp_transport_free does this anyway; call
- * it directly when you want to observe the result. */
+/** Closes the pool (3.1.4.2). psrp_transport_free does this anyway; call it
+ * directly when you want to observe the result. */
 psrp_result_t psrp_transport_close_shell(psrp_transport_t *t);
 
 /** True once the remote pipeline has reported it is done. */

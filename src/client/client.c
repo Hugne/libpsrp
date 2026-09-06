@@ -18,7 +18,7 @@
 #include <stdio.h>
 
 #include "psrp/psrp_client.h"
-#include "psrp/psrp_winrm.h"
+#include "psrp/psrp_transport.h"
 
 /* One poll of the transport. Short enough that a caller's timeout is honoured
  * with reasonable granularity, long enough not to spin. */
@@ -272,7 +272,7 @@ static psrp_result_t pump(psrp_client_t *c, psrp_event_kind_t want,
 psrp_result_t psrp_client_connect(const psrp_client_config_t *cfg,
                                   psrp_client_t **out)
 {
-    psrp_wsman_config_t wcfg;
+    winrm_config_t wcfg;
     psrp_client_t *c;
     psrp_buffer_t payload;
     psrp_result_t rc;
@@ -295,7 +295,7 @@ psrp_result_t psrp_client_connect(const psrp_client_config_t *cfg,
     wcfg.password = cfg->password;
     wcfg.operation_timeout_ms = cfg->operation_timeout_ms;
 
-    rc = psrp_wsman_transport_create(&wcfg, &c->t);
+    rc = psrp_transport_over_winrm(&wcfg, &c->t);
     if (rc != PSRP_OK) {
         set_err(c, "connect", psrp_transport_last_error(c->t));
         psrp_transport_free(c->t);

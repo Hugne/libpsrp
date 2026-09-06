@@ -9,7 +9,7 @@
 #include <string.h>
 
 #include "psrp/psrp.h"
-#include "psrp/psrp_winrm.h"
+#include "psrp/psrp_transport.h"
 #include "psrp_test.h"
 
 /* One item as WinRM returns it: namespaced, with the shell namespace bound to
@@ -30,18 +30,19 @@ static const char kShellXml[] =
 
 PSRP_TEST(parses_a_shell_element)
 {
-    psrp_shell_info_t s;
-    char id[PSRP_GUID_STR_LEN + 1];
+    winrm_shell_info_t s;
 
-    ASSERT_OK(psrp_wsman_parse_shell(kShellXml, sizeof kShellXml - 1, &s));
-    ASSERT_OK(psrp_guid_format(&s.shell_id, id, sizeof id));
-    ASSERT_EQ_STR(id, "4358d2a2-8a0b-4b5d-9c43-1d2e3f405162");
+    ASSERT_OK(winrm_parse_shell(kShellXml, sizeof kShellXml - 1, &s));
+    /* Verbatim, in the case the server sent it. Round-tripping it through
+     * a GUID used to normalise the case; an opaque identifier should come
+     * back as it arrived. */
+    ASSERT_EQ_STR(s.shell_id, "4358D2A2-8A0B-4B5D-9C43-1D2E3F405162");
     ASSERT_EQ_STR(s.name, "Runspace1");
     ASSERT_EQ_STR(s.state, "Disconnected");
     ASSERT_EQ_STR(s.owner, "CLAUDE\\Administrator");
     ASSERT_EQ_STR(s.resource_uri,
                   "http://schemas.microsoft.com/powershell/Microsoft.PowerShell");
-    psrp_shell_info_free(&s);
+    winrm_shell_info_free(&s);
 }
 
 PSRP_TEST(the_namespace_prefix_does_not_matter)
@@ -54,11 +55,11 @@ PSRP_TEST(the_namespace_prefix_does_not_matter)
         "windows/shell\">"
         "<w:ShellId>4358D2A2-8A0B-4B5D-9C43-1D2E3F405162</w:ShellId>"
         "<w:State>Connected</w:State></w:Shell>";
-    psrp_shell_info_t s;
+    winrm_shell_info_t s;
 
-    ASSERT_OK(psrp_wsman_parse_shell(xml, sizeof xml - 1, &s));
+    ASSERT_OK(winrm_parse_shell(xml, sizeof xml - 1, &s));
     ASSERT_EQ_STR(s.state, "Connected");
-    psrp_shell_info_free(&s);
+    winrm_shell_info_free(&s);
 }
 
 PSRP_TEST(a_braced_or_padded_shell_id_is_accepted)
@@ -71,13 +72,13 @@ PSRP_TEST(a_braced_or_padded_shell_id_is_accepted)
     static const char padded[] =
         "<Shell><ShellId>  4358D2A2-8A0B-4B5D-9C43-1D2E3F405162  </ShellId>"
         "</Shell>";
-    psrp_shell_info_t a, b;
+    winrm_shell_info_t a, b;
 
-    ASSERT_OK(psrp_wsman_parse_shell(braced, sizeof braced - 1, &a));
-    ASSERT_OK(psrp_wsman_parse_shell(padded, sizeof padded - 1, &b));
-    ASSERT_TRUE(psrp_guid_equal(&a.shell_id, &b.shell_id));
-    psrp_shell_info_free(&a);
-    psrp_shell_info_free(&b);
+    ASSERT_OK(winrm_parse_shell(braced, sizeof braced - 1, &a));
+    ASSERT_OK(winrm_parse_shell(padded, sizeof padded - 1, &b));
+    ASSERT_EQ_STR(a.shell_id, b.shell_id);
+    winrm_shell_info_free(&a);
+    winrm_shell_info_free(&b);
 }
 
 PSRP_TEST(a_shell_without_an_id_is_rejected)
@@ -85,76 +86,83 @@ PSRP_TEST(a_shell_without_an_id_is_rejected)
     /* Reporting it would hand the caller an entry it cannot connect to. */
     static const char xml[] =
         "<Shell><Name>nameless</Name><State>Connected</State></Shell>";
-    psrp_shell_info_t s;
+    winrm_shell_info_t s;
 
-    ASSERT_ERR(psrp_wsman_parse_shell(xml, sizeof xml - 1, &s),
+    ASSERT_ERR(winrm_parse_shell(xml, sizeof xml - 1, &s),
                PSRP_ERR_MALFORMED);
     ASSERT_NULL(s.name);      /* nothing is left owned on the failure path */
 }
 
-PSRP_TEST(a_malformed_id_is_rejected)
+/* A WS-Management ShellId is an opaque string, so a non-GUID one is valid
+ * here. It used to be rejected, back when this parser produced a GUID -- but
+ * that was PSRP's requirement wearing WinRM's clothes. A caller that means to
+ * adopt the pool converts the string itself and finds out then; a caller
+ * merely listing shells has no reason to care. What is still rejected is a
+ * shell with no id at all, which cannot be addressed by anyone. */
+PSRP_TEST(a_non_guid_id_is_a_valid_shell_id)
 {
     static const char xml[] =
         "<Shell><ShellId>not-a-guid</ShellId></Shell>";
-    psrp_shell_info_t s;
+    winrm_shell_info_t s;
 
-    ASSERT_ERR(psrp_wsman_parse_shell(xml, sizeof xml - 1, &s),
-               PSRP_ERR_MALFORMED);
+    ASSERT_OK(winrm_parse_shell(xml, sizeof xml - 1, &s));
+    ASSERT_EQ_STR(s.shell_id, "not-a-guid");
+    winrm_shell_info_free(&s);
 }
 
 PSRP_TEST(rejects_bad_arguments_and_junk)
 {
-    psrp_shell_info_t s;
+    winrm_shell_info_t s;
 
-    ASSERT_ERR(psrp_wsman_parse_shell(NULL, 0, &s), PSRP_ERR_INVALID_ARG);
-    ASSERT_ERR(psrp_wsman_parse_shell("<Shell/>", 8, NULL),
+    ASSERT_ERR(winrm_parse_shell(NULL, 0, &s), PSRP_ERR_INVALID_ARG);
+    ASSERT_ERR(winrm_parse_shell("<Shell/>", 8, NULL),
                PSRP_ERR_INVALID_ARG);
     /* Not XML at all: rejected, never read as an empty shell. */
-    ASSERT_TRUE(psrp_wsman_parse_shell("<<<<", 4, &s) != PSRP_OK);
+    ASSERT_TRUE(winrm_parse_shell("<<<<", 4, &s) != PSRP_OK);
 }
 
 PSRP_TEST(freeing_is_idempotent)
 {
-    psrp_shell_info_t s;
+    winrm_shell_info_t s;
 
-    ASSERT_OK(psrp_wsman_parse_shell(kShellXml, sizeof kShellXml - 1, &s));
-    psrp_shell_info_free(&s);
-    psrp_shell_info_free(&s);
-    psrp_shell_info_free(NULL);
+    ASSERT_OK(winrm_parse_shell(kShellXml, sizeof kShellXml - 1, &s));
+    winrm_shell_info_free(&s);
+    winrm_shell_info_free(&s);
+    winrm_shell_info_free(NULL);
     ASSERT_NULL(s.name);
 
-    psrp_shell_info_free_all(NULL, 0);
+    winrm_shell_info_free_all(NULL, 0);
 }
 
 PSRP_TEST(enumerate_rejects_bad_arguments)
 {
-    psrp_wsman_config_t cfg;
-    psrp_shell_info_t *list = NULL;
+    winrm_config_t cfg;
+    winrm_shell_info_t *list = NULL;
     size_t count = 99;
 
     memset(&cfg, 0, sizeof cfg);
-    ASSERT_ERR(psrp_wsman_enumerate_shells(NULL, &list, &count),
+    ASSERT_ERR(winrm_enumerate_shells(NULL, &list, &count),
                PSRP_ERR_INVALID_ARG);
-    ASSERT_ERR(psrp_wsman_enumerate_shells(&cfg, NULL, &count),
+    ASSERT_ERR(winrm_enumerate_shells(&cfg, NULL, &count),
                PSRP_ERR_INVALID_ARG);
-    ASSERT_ERR(psrp_wsman_enumerate_shells(&cfg, &list, NULL),
+    ASSERT_ERR(winrm_enumerate_shells(&cfg, &list, NULL),
                PSRP_ERR_INVALID_ARG);
 }
 
 PSRP_TEST(discovery_rejects_bad_arguments)
 {
-    psrp_wsman_config_t cfg;
-    psrp_discovery_t *d = NULL;
-    psrp_shell_info_t *list = NULL;
+    winrm_config_t cfg;
+    winrm_enumerator_t *d = NULL;
+    winrm_shell_info_t *list = NULL;
     size_t count = 99;
 
     memset(&cfg, 0, sizeof cfg);
-    ASSERT_ERR(psrp_wsman_discovery_open(NULL, &d), PSRP_ERR_INVALID_ARG);
-    ASSERT_ERR(psrp_wsman_discovery_open(&cfg, NULL), PSRP_ERR_INVALID_ARG);
-    ASSERT_ERR(psrp_wsman_discovery_shells(NULL, &list, &count),
+    ASSERT_ERR(winrm_enumerator_open(NULL, &d), PSRP_ERR_INVALID_ARG);
+    ASSERT_ERR(winrm_enumerator_open(&cfg, NULL), PSRP_ERR_INVALID_ARG);
+    ASSERT_ERR(winrm_enumerator_shells(NULL, &list, &count),
                PSRP_ERR_INVALID_ARG);
     /* Freeing nothing is allowed, so a caller can clean up unconditionally. */
-    psrp_wsman_discovery_free(NULL);
+    winrm_enumerator_free(NULL);
 }
 
 PSRP_TEST(a_discovery_handle_can_list_repeatedly)
@@ -168,27 +176,27 @@ PSRP_TEST(a_discovery_handle_can_list_repeatedly)
      * Enumeration needs a live WinRM service, so this only asserts the shape
      * when the machine has one; on a machine without, opening fails and there
      * is nothing to check. */
-    psrp_wsman_config_t cfg;
-    psrp_discovery_t *d = NULL;
+    winrm_config_t cfg;
+    winrm_enumerator_t *d = NULL;
     int i;
 
     memset(&cfg, 0, sizeof cfg);
     cfg.operation_timeout_ms = 30000;
 
-    if (psrp_wsman_discovery_open(&cfg, &d) != PSRP_OK) return;
+    if (winrm_enumerator_open(&cfg, &d) != PSRP_OK) return;
     ASSERT_NOT_NULL(d);
 
     for (i = 0; i < 3; i++) {
-        psrp_shell_info_t *list = NULL;
+        winrm_shell_info_t *list = NULL;
         size_t count = 12345;
-        ASSERT_OK(psrp_wsman_discovery_shells(d, &list, &count));
+        ASSERT_OK(winrm_enumerator_shells(d, &list, &count));
         /* Count is always set, even when the server reports nothing. */
         ASSERT_TRUE(count != 12345);
         if (count == 0) ASSERT_NULL(list);
-        psrp_shell_info_free_all(list, count);
+        winrm_shell_info_free_all(list, count);
     }
 
-    psrp_wsman_discovery_free(d);
+    winrm_enumerator_free(d);
 }
 
 static const psrp_test_case_t cases[] = {
@@ -196,7 +204,7 @@ static const psrp_test_case_t cases[] = {
     PSRP_TEST_CASE(the_namespace_prefix_does_not_matter),
     PSRP_TEST_CASE(a_braced_or_padded_shell_id_is_accepted),
     PSRP_TEST_CASE(a_shell_without_an_id_is_rejected),
-    PSRP_TEST_CASE(a_malformed_id_is_rejected),
+    PSRP_TEST_CASE(a_non_guid_id_is_a_valid_shell_id),
     PSRP_TEST_CASE(rejects_bad_arguments_and_junk),
     PSRP_TEST_CASE(freeing_is_idempotent),
     PSRP_TEST_CASE(enumerate_rejects_bad_arguments),

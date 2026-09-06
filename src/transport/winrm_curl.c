@@ -1,8 +1,11 @@
-/* WSMan transport for PSRP ([MS-PSRP] 3.1.5.3) on libcurl and GSS-API.
+/* A WS-Management client on libcurl and GSS-API ([MS-WSMV]).
  *
- * The counterpart to transport_wsman.c. Windows has a WSMan client in the OS
- * and that file is a thin shell over it; here every layer has to be built:
- * HTTP, authentication, message encryption, and the WS-Management envelopes.
+ * The counterpart to winrm_wsman.c. Windows has a WSMan client in the OS and
+ * that file is a thin shim over it; here every layer has to be built: HTTP,
+ * authentication, message encryption, and the SOAP envelopes.
+ *
+ * Nothing here knows what travels on the streams it moves. PSRP's use of this
+ * client lives in psrp_over_winrm.c.
  *
  * Four things about this are not obvious and were each established the hard
  * way against a live server. They are the reason this file looks the way it
@@ -25,12 +28,12 @@
  *     Kerberos ticket that a workgroup target does not have, and it keeps the
  *     security context to itself. We need that context to encrypt bodies.
  *
- *  4. gss_wrap_iov, which would hand back the signature and ciphertext
- *     already separated, is not implemented by gss-ntlmssp -- it answers
- *     GSS_S_UNAVAILABLE. Plain gss_wrap works, and an NTLM signature is a
- *     fixed 16 bytes, so the split is done by hand. A Kerberos context has a
- *     variable-length header and would need the IOV path, which MIT's
- *     Kerberos mechanism does implement.
+ *  4. Message encryption needs the signature and the ciphertext separately.
+ *     gss_wrap_iov produces exactly that and Kerberos requires it, its header
+ *     being variable-length. gss-ntlmssp does not implement IOV at all --
+ *     it answers GSS_S_UNAVAILABLE -- but an NTLM signature is a fixed 16
+ *     bytes, so plain gss_wrap output can be split by hand. Both paths are
+ *     here, chosen by what the mechanism supports rather than by preference.
  */
 
 #define _GNU_SOURCE
@@ -43,8 +46,7 @@
 #include <gssapi/gssapi.h>
 #include <gssapi/gssapi_ext.h>
 
-#include "psrp/psrp_winrm.h"
-#include "psrp/psrp_fragment.h"
+#include "psrp/winrm.h"
 #include "internal/psrp_codec.h"
 #include "internal/psrp_xml.h"
 
@@ -66,13 +68,35 @@
 #define DEFAULT_TIMEOUT_MS 240000u
 #define MAX_ENVELOPE_SIZE  512000
 
-/* NTLMSSP, 1.3.6.1.4.1.311.2.2.10. Windows accepts a bare NTLM token under the
- * "Negotiate" scheme, and doing so avoids depending on the SPNEGO mechanism
- * being able to negotiate NTLM on the client's behalf. */
+/* The three mechanisms, by OID.
+ *
+ * SPNEGO negotiates; the other two are it forced one way or the other, which
+ * is what a test needs when the point is to prove which one was used.
+ *
+ * Windows accepts a bare NTLM or Kerberos token under the "Negotiate" HTTP
+ * scheme, so forcing a mechanism needs no change to the header we send. */
+static gss_OID_desc spnego_oid = { 6, (void *)"\x2b\x06\x01\x05\x05\x02" };
+
+/* Kerberos 5, 1.2.840.113554.1.2.2 */
+static gss_OID_desc krb5_oid = { 9,
+    (void *)"\x2a\x86\x48\x86\xf7\x12\x01\x02\x02" };
+
+/* NTLMSSP, 1.3.6.1.4.1.311.2.2.10 */
 static gss_OID_desc ntlm_oid = { 10,
     (void *)"\x2b\x06\x01\x04\x01\x82\x37\x02\x02\x0a" };
 
-struct psrp_transport {
+static gss_OID mech_for(winrm_auth_t a)
+{
+    switch (a) {
+    case WINRM_AUTH_KERBEROS:  return &krb5_oid;
+    case WINRM_AUTH_NEGOTIATE: return &spnego_oid;
+    /* DEFAULT and NTLM alike: see the note in winrm.h for why the
+     * default is not SPNEGO yet. */
+    default:                        return &ntlm_oid;
+    }
+}
+
+struct winrm_session {
     CURL *curl;                 /* one for the session; see note 1 */
     bool curl_global;           /* we called curl_global_init */
     char *url;
@@ -83,9 +107,10 @@ struct psrp_transport {
     gss_ctx_id_t gss;
     gss_cred_id_t cred;
     gss_name_t target;
+    gss_OID mech;                 /* what we asked for */
+    winrm_auth_t negotiated; /* what the context actually used */
     bool authenticated;
 
-    psrp_guid_t shell_id;
     /* What the server calls this shell, read back from the Create response
      * rather than assumed to be the id we asked for. WinRM is free to assign
      * its own, and every later selector has to match it exactly or the
@@ -94,7 +119,6 @@ struct psrp_transport {
      * difference. */
     char shell_sel[64];
     bool have_shell;
-    psrp_guid_t command_id;
     char cmd_sel[64];   /* the CommandId the server reports back */
     bool have_command;
     bool command_done;
@@ -110,24 +134,8 @@ struct psrp_transport {
     char last_error[640];
 };
 
-/* Formats a GUID the way WinRM wants it in a selector: upper case.
- *
- * The server matches ShellId case-sensitively. Sending the lower-case form
- * that psrp_guid_format produces creates the shell happily and then reports
- * "the shell was not found on the server" on the very next request, which
- * reads as the shell having died rather than as a spelling difference. The
- * Windows transport uppercases for the same reason (TODO PSRP-24). */
-static psrp_result_t guid_upper(const psrp_guid_t *g, char *out, size_t cap)
-{
-    psrp_result_t rc = psrp_guid_format(g, out, cap);
-    size_t i;
-    if (rc != PSRP_OK) return rc;
-    for (i = 0; out[i]; i++)
-        if (out[i] >= 'a' && out[i] <= 'f') out[i] = (char)(out[i] - 'a' + 'A');
-    return PSRP_OK;
-}
 
-static void set_error(psrp_transport_t *t, const char *what, const char *detail)
+static void set_error(winrm_session_t *t, const char *what, const char *detail)
 {
     if (!t) return;
     if (detail && *detail)
@@ -136,7 +144,7 @@ static void set_error(psrp_transport_t *t, const char *what, const char *detail)
         snprintf(t->last_error, sizeof t->last_error, "%s", what);
 }
 
-static void set_gss_error(psrp_transport_t *t, const char *what,
+static void set_gss_error(winrm_session_t *t, const char *what,
                           OM_uint32 major, OM_uint32 minor)
 {
     OM_uint32 m, ctx = 0;
@@ -167,7 +175,7 @@ static void set_gss_error(psrp_transport_t *t, const char *what,
 
 static size_t on_header(char *b, size_t sz, size_t n, void *user)
 {
-    psrp_transport_t *t = (psrp_transport_t *)user;
+    winrm_session_t *t = (winrm_session_t *)user;
     size_t len = sz * n;
 
     if (len > 18 && strncasecmp(b, "WWW-Authenticate:", 17) == 0) {
@@ -191,14 +199,14 @@ static size_t on_header(char *b, size_t sz, size_t n, void *user)
  * it with strlen would truncate at the first NUL in the ciphertext. */
 static size_t on_body(char *b, size_t sz, size_t n, void *user)
 {
-    psrp_transport_t *t = (psrp_transport_t *)user;
+    winrm_session_t *t = (winrm_session_t *)user;
     size_t len = sz * n;
     if (psrp_buffer_append(&t->resp, b, len) != PSRP_OK) return 0;
     return len;
 }
 
 /* One POST. `ctype` and `body` may be NULL/0 for the empty handshake posts. */
-static psrp_result_t http_post(psrp_transport_t *t, const char *ctype,
+static psrp_result_t http_post(winrm_session_t *t, const char *ctype,
                                const void *body, size_t len,
                                const char *auth_header, long *status)
 {
@@ -238,7 +246,7 @@ static psrp_result_t http_post(psrp_transport_t *t, const char *ctype,
 
 /* ------------------------------------------------------- authentication -- */
 
-static psrp_result_t authenticate(psrp_transport_t *t)
+static psrp_result_t authenticate(winrm_session_t *t)
 {
     OM_uint32 major, minor;
     gss_buffer_desc in_tok, out_tok;
@@ -257,7 +265,7 @@ static psrp_result_t authenticate(psrp_transport_t *t)
         out_tok.value = NULL;
         out_tok.length = 0;
         major = gss_init_sec_context(&minor, t->cred, &t->gss, t->target,
-                                     &ntlm_oid,
+                                     t->mech,
                                      GSS_C_MUTUAL_FLAG | GSS_C_CONF_FLAG |
                                      GSS_C_INTEG_FLAG | GSS_C_SEQUENCE_FLAG,
                                      GSS_C_INDEFINITE,
@@ -290,7 +298,29 @@ static psrp_result_t authenticate(psrp_transport_t *t)
         if (rc != PSRP_OK) goto done;
 
         if (major == GSS_S_COMPLETE) {
+            gss_OID actual = GSS_C_NO_OID;
+            OM_uint32 m2;
+
             t->authenticated = true;
+            if (t->mech == &krb5_oid) t->negotiated = WINRM_AUTH_KERBEROS;
+            else if (t->mech == &ntlm_oid) t->negotiated = WINRM_AUTH_NTLM;
+
+            /* Ask the context which mechanism it settled on rather than
+             * assuming. Under SPNEGO that is the whole question, and a test
+             * meaning to exercise Kerberos has to be able to tell that it did
+             * not quietly succeed over NTLM instead. */
+            if (gss_inquire_context(&m2, t->gss, NULL, NULL, NULL, &actual,
+                                    NULL, NULL, NULL) == GSS_S_COMPLETE &&
+                actual != GSS_C_NO_OID) {
+                if (actual->length == krb5_oid.length &&
+                    memcmp(actual->elements, krb5_oid.elements,
+                           krb5_oid.length) == 0)
+                    t->negotiated = WINRM_AUTH_KERBEROS;
+                else if (actual->length == ntlm_oid.length &&
+                         memcmp(actual->elements, ntlm_oid.elements,
+                                ntlm_oid.length) == 0)
+                    t->negotiated = WINRM_AUTH_NTLM;
+            }
             rc = PSRP_OK;
             goto done;
         }
@@ -330,31 +360,82 @@ done:
 /* -------------------------------------------------- message encryption -- */
 
 /* Wraps `soap` into the multipart/encrypted body WinRM expects. */
-static psrp_result_t encrypt_body(psrp_transport_t *t, const char *soap,
+static psrp_result_t encrypt_body(winrm_session_t *t, const char *soap,
                                   size_t slen, psrp_buffer_t *out)
 {
     OM_uint32 major, minor;
+    gss_iov_buffer_desc iov[4];
     gss_buffer_desc in, wrapped;
+    unsigned char *scratch = NULL;
+    const unsigned char *sig = NULL, *enc = NULL;
+    size_t siglen = 0, enclen = 0;
     int conf = 0;
     char head[256];
     uint8_t siglen_le[4];
     psrp_result_t rc;
+    bool used_iov = false;
 
-    in.value = (void *)soap;
-    in.length = slen;
     wrapped.value = NULL;
     wrapped.length = 0;
 
-    major = gss_wrap(&minor, t->gss, 1, GSS_C_QOP_DEFAULT, &in, &conf, &wrapped);
-    if (major != GSS_S_COMPLETE) {
-        set_gss_error(t, "gss_wrap", major, minor);
-        return PSRP_ERR_CRYPTO;
+    /* Two ways to produce what WinRM wants, and which one applies depends on
+     * the mechanism rather than on preference.
+     *
+     * gss_wrap_iov hands back the signature and the ciphertext already
+     * separated, which is exactly the shape needed, and Kerberos requires it:
+     * its header is variable-length, so there is no fixed offset to split at.
+     * gss-ntlmssp does not implement IOV at all -- it answers
+     * GSS_S_UNAVAILABLE -- but NTLM's signature is always 16 bytes, so plain
+     * gss_wrap output can be split by hand. Try the general path, fall back
+     * to the special case. */
+    scratch = (unsigned char *)malloc(slen ? slen : 1);
+    if (!scratch) return PSRP_ERR_NOMEM;
+    memcpy(scratch, soap, slen);
+
+    memset(iov, 0, sizeof iov);
+    iov[0].type = GSS_IOV_BUFFER_TYPE_HEADER | GSS_IOV_BUFFER_FLAG_ALLOCATE;
+    iov[1].type = GSS_IOV_BUFFER_TYPE_DATA;
+    iov[1].buffer.value = scratch;
+    iov[1].buffer.length = slen;
+    iov[2].type = GSS_IOV_BUFFER_TYPE_PADDING | GSS_IOV_BUFFER_FLAG_ALLOCATE;
+    iov[3].type = GSS_IOV_BUFFER_TYPE_TRAILER | GSS_IOV_BUFFER_FLAG_ALLOCATE;
+
+    major = gss_wrap_iov(&minor, t->gss, 1, GSS_C_QOP_DEFAULT, &conf, iov, 4);
+    if (major == GSS_S_COMPLETE) {
+        used_iov = true;
+        sig = (const unsigned char *)iov[0].buffer.value;
+        siglen = iov[0].buffer.length;
+        /* Padding and trailer belong with the ciphertext, not the signature. */
+        enc = (const unsigned char *)iov[1].buffer.value;
+        enclen = iov[1].buffer.length + iov[2].buffer.length +
+                 iov[3].buffer.length;
+    } else {
+        in.value = (void *)soap;
+        in.length = slen;
+        major = gss_wrap(&minor, t->gss, 1, GSS_C_QOP_DEFAULT, &in, &conf,
+                         &wrapped);
+        if (major != GSS_S_COMPLETE) {
+            free(scratch);
+            set_gss_error(t, "gss_wrap", major, minor);
+            return PSRP_ERR_CRYPTO;
+        }
+        if (wrapped.length <= NTLM_SIGNATURE_BYTES) {
+            gss_release_buffer(&minor, &wrapped);
+            free(scratch);
+            set_error(t, "encrypt_body", "wrapped token too short to split");
+            return PSRP_ERR_CRYPTO;
+        }
+        sig = (const unsigned char *)wrapped.value;
+        siglen = NTLM_SIGNATURE_BYTES;
+        enc = sig + NTLM_SIGNATURE_BYTES;
+        enclen = wrapped.length - NTLM_SIGNATURE_BYTES;
     }
+
     /* Never send a body the context declined to encrypt. */
-    if (!conf || wrapped.length <= NTLM_SIGNATURE_BYTES) {
-        gss_release_buffer(&minor, &wrapped);
+    if (!conf) {
         set_error(t, "encrypt_body", "context did not provide confidentiality");
-        return PSRP_ERR_CRYPTO;
+        rc = PSRP_ERR_CRYPTO;
+        goto done;
     }
 
     /* The leading tab on each part header is not decoration: WinRM's parser
@@ -368,21 +449,27 @@ static psrp_result_t encrypt_body(psrp_transport_t *t, const char *soap,
              "\tContent-Type: application/octet-stream\r\n",
              (unsigned)slen);
 
-    siglen_le[0] = (uint8_t)(NTLM_SIGNATURE_BYTES & 0xFF);
-    siglen_le[1] = siglen_le[2] = siglen_le[3] = 0;
+    siglen_le[0] = (uint8_t)(siglen & 0xFF);
+    siglen_le[1] = (uint8_t)((siglen >> 8) & 0xFF);
+    siglen_le[2] = (uint8_t)((siglen >> 16) & 0xFF);
+    siglen_le[3] = (uint8_t)((siglen >> 24) & 0xFF);
 
     rc = psrp_buffer_append_str(out, head);
     if (rc == PSRP_OK) rc = psrp_buffer_append(out, siglen_le, 4);
-    if (rc == PSRP_OK) rc = psrp_buffer_append(out, wrapped.value,
-                                               wrapped.length);
+    if (rc == PSRP_OK) rc = psrp_buffer_append(out, sig, siglen);
+    if (rc == PSRP_OK) rc = psrp_buffer_append(out, enc, enclen);
     if (rc == PSRP_OK) rc = psrp_buffer_append_str(out,
                                                    "--" ENC_BOUNDARY "--\r\n");
-    gss_release_buffer(&minor, &wrapped);
+
+done:
+    if (used_iov) gss_release_iov_buffer(&minor, iov, 4);
+    else gss_release_buffer(&minor, &wrapped);
+    free(scratch);
     return rc;
 }
 
 /* Recovers the SOAP from a multipart/encrypted response. */
-static psrp_result_t decrypt_body(psrp_transport_t *t, const void *resp,
+static psrp_result_t decrypt_body(winrm_session_t *t, const void *resp,
                                   size_t rlen, psrp_buffer_t *out)
 {
     static const char marker[] = "application/octet-stream\r\n";
@@ -431,7 +518,7 @@ static psrp_result_t decrypt_body(psrp_transport_t *t, const void *resp,
 }
 
 /* Sends one SOAP request encrypted and returns the decrypted reply. */
-static psrp_result_t soap_call(psrp_transport_t *t, const char *soap,
+static psrp_result_t soap_call(winrm_session_t *t, const char *soap,
                                psrp_buffer_t *reply)
 {
     psrp_buffer_t enc;
@@ -479,7 +566,7 @@ static psrp_result_t soap_call(psrp_transport_t *t, const char *soap,
 
 /* The header every WS-Man request carries. `action` selects the operation and
  * `selector` carries the ShellId once one exists. */
-static psrp_result_t envelope_head(psrp_transport_t *t, psrp_buffer_t *b,
+static psrp_result_t envelope_head(winrm_session_t *t, psrp_buffer_t *b,
                                    const char *action, bool with_shell)
 {
     char msgid[PSRP_GUID_BUF_SIZE];
@@ -530,10 +617,10 @@ static psrp_result_t envelope_head(psrp_transport_t *t, psrp_buffer_t *b,
 
 /* ------------------------------------------------------------ lifetime -- */
 
-psrp_result_t psrp_wsman_transport_create(const psrp_wsman_config_t *cfg,
-                                          psrp_transport_t **out)
+psrp_result_t winrm_session_open(const winrm_config_t *cfg,
+                                          winrm_session_t **out)
 {
-    psrp_transport_t *t;
+    winrm_session_t *t;
     OM_uint32 major, minor;
     gss_buffer_desc ubuf, pbuf, tbuf;
     gss_name_t user_name = GSS_C_NO_NAME;
@@ -544,7 +631,7 @@ psrp_result_t psrp_wsman_transport_create(const psrp_wsman_config_t *cfg,
     if (!out) return PSRP_ERR_INVALID_ARG;
     *out = NULL;
 
-    t = (psrp_transport_t *)calloc(1, sizeof *t);
+    t = (winrm_session_t *)calloc(1, sizeof *t);
     if (!t) return PSRP_ERR_NOMEM;
 
     psrp_buffer_init(&t->rx);
@@ -554,11 +641,18 @@ psrp_result_t psrp_wsman_transport_create(const psrp_wsman_config_t *cfg,
     t->target = GSS_C_NO_NAME;
     t->timeout_ms = (cfg && cfg->operation_timeout_ms)
                         ? cfg->operation_timeout_ms : DEFAULT_TIMEOUT_MS;
+    t->mech = mech_for(cfg ? cfg->auth : WINRM_AUTH_DEFAULT);
+    t->negotiated = WINRM_AUTH_DEFAULT;
+
+    /* With no username, GSS_C_NO_CREDENTIAL means "whatever the environment
+     * already holds" -- for Kerberos, the ticket cache kinit filled in. That
+     * is the ordinary way a Kerberos client authenticates, and it is why a
+     * password is optional rather than required here. */
 
     conn = (cfg && cfg->connection) ? cfg->connection
                                     : "http://localhost:5985/wsman";
     t->url = strdup(conn);
-    if (!t->url) { psrp_transport_free(t); return PSRP_ERR_NOMEM; }
+    if (!t->url) { winrm_session_free(t); return PSRP_ERR_NOMEM; }
 
     /* The service principal is HTTP@<host>, so the host has to be lifted out
      * of the URL. */
@@ -572,14 +666,14 @@ psrp_result_t psrp_wsman_transport_create(const psrp_wsman_config_t *cfg,
     if (cfg && cfg->username && *cfg->username) {
         t->user = strdup(cfg->username);
         t->pass = strdup(cfg->password ? cfg->password : "");
-        if (!t->user || !t->pass) { psrp_transport_free(t); return PSRP_ERR_NOMEM; }
+        if (!t->user || !t->pass) { winrm_session_free(t); return PSRP_ERR_NOMEM; }
 
         ubuf.value = t->user;
         ubuf.length = strlen(t->user);
         major = gss_import_name(&minor, &ubuf, GSS_C_NT_USER_NAME, &user_name);
         if (major != GSS_S_COMPLETE) {
             set_gss_error(t, "gss_import_name", major, minor);
-            psrp_transport_free(t);
+            winrm_session_free(t);
             return PSRP_ERR_TRANSPORT;
         }
 
@@ -587,7 +681,7 @@ psrp_result_t psrp_wsman_transport_create(const psrp_wsman_config_t *cfg,
         pbuf.value = t->pass;
         pbuf.length = strlen(t->pass);
         {
-            gss_OID_set_desc mechs = { 1, &ntlm_oid };
+            gss_OID_set_desc mechs = { 1, t->mech };
             major = gss_acquire_cred_with_password(&minor, user_name, &pbuf,
                                                    GSS_C_INDEFINITE, &mechs,
                                                    GSS_C_INITIATE, &t->cred,
@@ -596,7 +690,7 @@ psrp_result_t psrp_wsman_transport_create(const psrp_wsman_config_t *cfg,
         gss_release_name(&minor, &user_name);
         if (major != GSS_S_COMPLETE) {
             set_gss_error(t, "gss_acquire_cred_with_password", major, minor);
-            psrp_transport_free(t);
+            winrm_session_free(t);
             return PSRP_ERR_TRANSPORT;
         }
     }
@@ -607,11 +701,11 @@ psrp_result_t psrp_wsman_transport_create(const psrp_wsman_config_t *cfg,
                             &t->target);
     if (major != GSS_S_COMPLETE) {
         set_gss_error(t, "gss_import_name(spn)", major, minor);
-        psrp_transport_free(t);
+        winrm_session_free(t);
         return PSRP_ERR_TRANSPORT;
     }
 
-    /* Paired with curl_global_cleanup in psrp_transport_free. libcurl
+    /* Paired with curl_global_cleanup in winrm_session_free. libcurl
      * refcounts these, so nesting is correct when a caller holds several
      * transports. Without the pair libcurl still initialises itself on the
      * first easy handle but never releases that state, which valgrind reports
@@ -619,24 +713,24 @@ psrp_result_t psrp_wsman_transport_create(const psrp_wsman_config_t *cfg,
      * call as not thread-safe, so a caller creating transports from several
      * threads at once should call curl_global_init itself first. */
     if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) {
-        psrp_transport_free(t);
+        winrm_session_free(t);
         return PSRP_ERR_INTERNAL;
     }
     t->curl_global = true;
 
     t->curl = curl_easy_init();
-    if (!t->curl) { psrp_transport_free(t); return PSRP_ERR_INTERNAL; }
+    if (!t->curl) { winrm_session_free(t); return PSRP_ERR_INTERNAL; }
 
     *out = t;
     return PSRP_OK;
 }
 
-void psrp_transport_free(psrp_transport_t *t)
+void winrm_session_free(winrm_session_t *t)
 {
     OM_uint32 minor;
 
     if (!t) return;
-    if (t->have_shell) (void)psrp_transport_close_shell(t);
+    if (t->have_shell) (void)winrm_shell_delete(t);
     if (t->curl) curl_easy_cleanup(t->curl);
     if (t->curl_global) curl_global_cleanup();
     if (t->gss != GSS_C_NO_CONTEXT)
@@ -652,18 +746,23 @@ void psrp_transport_free(psrp_transport_t *t)
     free(t);
 }
 
-const char *psrp_transport_last_error(const psrp_transport_t *t)
+const char *winrm_last_error(const winrm_session_t *t)
 {
     if (!t) return "no transport";
     return t->last_error[0] ? t->last_error : "no error";
 }
 
-bool psrp_transport_is_disconnected(const psrp_transport_t *t)
+bool winrm_is_disconnected(const winrm_session_t *t)
 {
     return t && t->disconnected;
 }
 
-bool psrp_transport_command_done(const psrp_transport_t *t)
+winrm_auth_t winrm_negotiated_auth(const winrm_session_t *t)
+{
+    return t ? t->negotiated : WINRM_AUTH_DEFAULT;
+}
+
+bool winrm_command_done(const winrm_session_t *t)
 {
     return t && t->command_done;
 }
@@ -674,7 +773,7 @@ bool psrp_transport_command_done(const psrp_transport_t *t)
  * each into `out`, and notices the terminal CommandState. Parsing goes
  * through the same pull-parser seam the protocol code uses, so there is no
  * second XML implementation in this file. */
-static psrp_result_t collect_streams(psrp_transport_t *t, const char *xml,
+static psrp_result_t collect_streams(winrm_session_t *t, const char *xml,
                                      size_t n, psrp_buffer_t *out)
 {
     psrp_xml_reader_t *r = NULL;
@@ -711,38 +810,32 @@ static psrp_result_t collect_streams(psrp_transport_t *t, const char *xml,
     return rc;
 }
 
-psrp_result_t psrp_transport_open(psrp_transport_t *t,
-                                  const psrp_guid_t *shell_id,
-                                  const void *payload, size_t len)
+psrp_result_t winrm_shell_create(winrm_session_t *t, const char *shell_id,
+                                 const void *open_content, size_t len)
 {
     psrp_buffer_t soap, b64, reply;
-    char shell[PSRP_GUID_BUF_SIZE];
     psrp_result_t rc;
 
-    if (!t || !shell_id || (len && !payload)) return PSRP_ERR_INVALID_ARG;
-
-    t->shell_id = *shell_id;
-    if (guid_upper(shell_id, shell, sizeof shell) != PSRP_OK)
-        return PSRP_ERR_INTERNAL;
+    if (!t || !shell_id || (len && !open_content)) return PSRP_ERR_INVALID_ARG;
 
     psrp_buffer_init(&soap);
     psrp_buffer_init(&b64);
     psrp_buffer_init(&reply);
 
-    rc = psrp_base64_encode_buf(&b64, payload, len);
+    rc = psrp_base64_encode_buf(&b64, open_content, len);
     if (rc != PSRP_OK) goto done;
 
     rc = envelope_head(t, &soap, WS_XFER "/Create", false);
     if (rc != PSRP_OK) goto done;
 
-    /* 3.1.5.3.1 requires the protocolversion option and the server faults
-     * without it. The name is lower-case; PowerShell sends it that way. */
+    /* The protocolversion option is required and the server faults without
+     * it. The name is lower-case; PowerShell sends it that way. */
     rc = psrp_buffer_append_str(&soap,
         "<wsman:OptionSet s:mustUnderstand=\"true\">"
         "<wsman:Option Name=\"protocolversion\" MustComply=\"true\">2.2"
         "</wsman:Option></wsman:OptionSet>"
         "</s:Header><s:Body><rsp:Shell ShellId=\"");
-    if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap, shell);
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap, shell_id);
     if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap,
         "\"><rsp:InputStreams>stdin pr</rsp:InputStreams>"
         "<rsp:OutputStreams>stdout</rsp:OutputStreams>"
@@ -756,15 +849,15 @@ psrp_result_t psrp_transport_open(psrp_transport_t *t,
     rc = soap_call(t, (const char *)soap.data, &reply);
     if (rc != PSRP_OK) goto done;
 
-    /* Take the ShellId the server reports rather than the one we asked for.
-     * It is usually the same, but "usually" is not a basis for every later
+    /* Take the ShellId the server reports rather than the one asked for. It
+     * is usually the same, but "usually" is not a basis for every later
      * selector, and a mismatch surfaces as the shell having vanished. */
     {
         psrp_xml_reader_t *r = NULL;
         psrp_xml_node_t node;
         bool want_text = false;
 
-        snprintf(t->shell_sel, sizeof t->shell_sel, "%s", shell);
+        snprintf(t->shell_sel, sizeof t->shell_sel, "%s", shell_id);
         if (psrp_xml_reader_create(reply.data, reply.len, &r) == PSRP_OK) {
             while (psrp_xml_read(r, &node) == PSRP_OK && node != PSRP_XML_EOF) {
                 if (node == PSRP_XML_ELEMENT &&
@@ -793,7 +886,7 @@ done:
     return rc;
 }
 
-psrp_result_t psrp_transport_receive(psrp_transport_t *t, psrp_buffer_t *out,
+psrp_result_t winrm_receive(winrm_session_t *t, psrp_buffer_t *out,
                                      uint32_t timeout_ms)
 {
     psrp_buffer_t soap, reply;
@@ -844,7 +937,7 @@ done:
     return rc;
 }
 
-psrp_result_t psrp_transport_close_shell(psrp_transport_t *t)
+psrp_result_t winrm_shell_delete(winrm_session_t *t)
 {
     psrp_buffer_t soap, reply;
     psrp_result_t rc;
@@ -870,16 +963,6 @@ psrp_result_t psrp_transport_close_shell(psrp_transport_t *t)
     return rc;
 }
 
-/* 3.1.5.3.3 puts only the FIRST fragment in Arguments; the rest follow by
- * Send. Decoding one fragment header tells us where that boundary is. */
-static size_t first_fragment_len(const void *payload, size_t len)
-{
-    psrp_reader_t r;
-    psrp_fragment_t f;
-    psrp_reader_init(&r, payload, len);
-    if (psrp_fragment_decode(&r, &f) != PSRP_OK) return 0;
-    return r.pos;
-}
 
 /* Reads one named element's text out of a response, for the ids the server
  * assigns. */
@@ -914,7 +997,7 @@ static bool response_text(const psrp_buffer_t *reply, const char *element,
 
 /* Shared by both streams: PSRP carries data on "stdin" and host responses on
  * "pr" (3.1.5.3.5). */
-static psrp_result_t send_on_stream(psrp_transport_t *t, const char *stream,
+static psrp_result_t send_on_stream(winrm_session_t *t, const char *stream,
                                     const void *data, size_t len)
 {
     psrp_buffer_t soap, b64, reply;
@@ -952,44 +1035,33 @@ static psrp_result_t send_on_stream(psrp_transport_t *t, const char *stream,
     return rc;
 }
 
-psrp_result_t psrp_transport_run_command(psrp_transport_t *t,
-                                         const psrp_guid_t *command_id,
-                                         const void *payload, size_t len)
+psrp_result_t winrm_command(winrm_session_t *t, const char *command_id,
+                            const char *command_line,
+                            const void *arguments, size_t len)
 {
     psrp_buffer_t soap, b64, reply;
-    char cmd[PSRP_GUID_BUF_SIZE];
-    size_t first;
     psrp_result_t rc;
 
-    if (!t || !command_id || !payload || len == 0) return PSRP_ERR_INVALID_ARG;
+    if (!t || !command_id) return PSRP_ERR_INVALID_ARG;
+    if (len && !arguments) return PSRP_ERR_INVALID_ARG;
     if (!t->have_shell) return PSRP_ERR_STATE;
 
-    if (guid_upper(command_id, cmd, sizeof cmd) != PSRP_OK)
-        return PSRP_ERR_INTERNAL;
-
-    first = first_fragment_len(payload, len);
-    if (first == 0) return PSRP_ERR_MALFORMED;
-
-    t->command_id = *command_id;
     t->command_done = false;
 
     psrp_buffer_init(&soap);
     psrp_buffer_init(&b64);
     psrp_buffer_init(&reply);
 
-    rc = psrp_base64_encode_buf(&b64, payload, first);
+    rc = psrp_base64_encode_buf(&b64, arguments, len);
     if (rc == PSRP_OK) rc = envelope_head(t, &soap, WS_SHELL "/Command", true);
-
-    /* 3.1.5.3.3 says the Command element MUST be empty, and here it can be.
-     * The Windows transport cannot manage that -- the Win32 client rejects an
-     * empty command line client-side with 0x80338180 and has to send a single
-     * space instead (TODO PSRP-08). Writing the envelope ourselves, the spec's
-     * actual requirement is expressible. */
     if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap,
         "</s:Header><s:Body><rsp:CommandLine CommandId=\"");
-    if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap, cmd);
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap, command_id);
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap, "\"><rsp:Command>");
     if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap,
-        "\"><rsp:Command></rsp:Command><rsp:Arguments>");
+                                                   command_line ? command_line : "");
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap,
+        "</rsp:Command><rsp:Arguments>");
     if (rc == PSRP_OK) rc = psrp_buffer_append(&soap, b64.data, b64.len);
     if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap,
         "</rsp:Arguments></rsp:CommandLine></s:Body></s:Envelope>");
@@ -1000,14 +1072,9 @@ psrp_result_t psrp_transport_run_command(psrp_transport_t *t,
     if (rc != PSRP_OK) goto done;
 
     /* As with the ShellId, use the identifier the server reports. */
-    snprintf(t->cmd_sel, sizeof t->cmd_sel, "%s", cmd);
+    snprintf(t->cmd_sel, sizeof t->cmd_sel, "%s", command_id);
     (void)response_text(&reply, "CommandId", t->cmd_sel, sizeof t->cmd_sel);
     t->have_command = true;
-
-    /* Fragments past the first travel by Send, per 3.1.5.3.3. */
-    if (len > first)
-        rc = send_on_stream(t, "stdin", (const uint8_t *)payload + first,
-                            len - first);
 
 done:
     psrp_buffer_free(&soap);
@@ -1016,19 +1083,15 @@ done:
     return rc;
 }
 
-psrp_result_t psrp_transport_send(psrp_transport_t *t, const void *data,
-                                  size_t len)
+psrp_result_t winrm_send(winrm_session_t *t, const char *stream,
+                         const void *data, size_t len)
 {
-    return send_on_stream(t, "stdin", data, len);
+    if (!stream) return PSRP_ERR_INVALID_ARG;
+    return send_on_stream(t, stream, data, len);
 }
 
-psrp_result_t psrp_transport_send_priority(psrp_transport_t *t,
-                                           const void *data, size_t len)
-{
-    return send_on_stream(t, "pr", data, len);
-}
 
-psrp_result_t psrp_transport_stop_pipeline(psrp_transport_t *t)
+psrp_result_t winrm_signal(winrm_session_t *t, winrm_signal_t code)
 {
     psrp_buffer_t soap, reply;
     psrp_result_t rc;
@@ -1039,15 +1102,18 @@ psrp_result_t psrp_transport_stop_pipeline(psrp_transport_t *t)
     psrp_buffer_init(&soap);
     psrp_buffer_init(&reply);
 
-    /* Targeted at the command, so it stops that pipeline rather than the pool
-     * (3.1.4.4, 3.1.5.3.9). */
+    /* Targeted at the command, so it stops that command rather than the
+     * shell. */
     rc = envelope_head(t, &soap, WS_SHELL "/Signal", true);
     if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap,
         "</s:Header><s:Body><rsp:Signal CommandId=\"");
     if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap, t->cmd_sel);
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap, "\"><rsp:Code>");
     if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap,
-        "\"><rsp:Code>" WS_SHELL "/signal/terminate</rsp:Code>"
-        "</rsp:Signal></s:Body></s:Envelope>");
+        code == WINRM_SIGNAL_CTRL_C ? WS_SHELL "/signal/ctrl_c"
+                                    : WS_SHELL "/signal/terminate");
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap,
+        "</rsp:Code></rsp:Signal></s:Body></s:Envelope>");
     if (rc == PSRP_OK) rc = psrp_buffer_append_u8(&soap, 0);
     if (rc == PSRP_OK) rc = soap_call(t, (const char *)soap.data, &reply);
 
@@ -1059,31 +1125,29 @@ psrp_result_t psrp_transport_stop_pipeline(psrp_transport_t *t)
 /* ---------------------------------------------------- not ported yet --- */
 /*
  * These answer PSRP_ERR_UNSUPPORTED rather than pretending. The Windows
- * transport implements all of them; TODO PSRP-35 records the order this is
+ * client implements all of them; TODO PSRP-35 records the order this is
  * being built in. An absent operation that says so is recoverable; one that
  * silently does nothing is not.
  */
 
-psrp_result_t psrp_transport_disconnect(psrp_transport_t *t,
-                                        uint32_t idle_timeout_ms)
+psrp_result_t winrm_disconnect(winrm_session_t *t, uint32_t idle_timeout_ms)
 {
     (void)idle_timeout_ms;
-    set_error(t, "disconnect", "not in the curl transport yet");
+    set_error(t, "disconnect", "not in this client yet");
     return PSRP_ERR_UNSUPPORTED;
 }
 
-psrp_result_t psrp_transport_reconnect(psrp_transport_t *t)
+psrp_result_t winrm_reconnect(winrm_session_t *t)
 {
-    set_error(t, "reconnect", "not in the curl transport yet");
+    set_error(t, "reconnect", "not in this client yet");
     return PSRP_ERR_UNSUPPORTED;
 }
 
-psrp_result_t psrp_transport_connect(psrp_transport_t *t,
-                                     const psrp_guid_t *shell_id,
-                                     const void *payload, size_t len,
-                                     psrp_buffer_t *response_payload)
+psrp_result_t winrm_connect(winrm_session_t *t, const char *shell_id,
+                            const void *open_content, size_t len,
+                            psrp_buffer_t *response_content)
 {
-    (void)shell_id; (void)payload; (void)len; (void)response_payload;
-    set_error(t, "connect", "not in the curl transport yet");
+    (void)shell_id; (void)open_content; (void)len; (void)response_content;
+    set_error(t, "connect", "not in this client yet");
     return PSRP_ERR_UNSUPPORTED;
 }

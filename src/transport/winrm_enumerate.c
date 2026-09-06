@@ -1,19 +1,15 @@
-/* Discovering RunspacePools on a server ([MS-PSRP] 3.1.4.10.1).
+/* Enumerating shells on a WS-Management server ([MS-WSMV]).
  *
- * Before a client can connect to someone else's RunspacePool it needs that
- * pool's identifier, and 3.1.4.10.1 gets it with a wxf:Enumerate over the
- * shell resource URI. Each RunspacePool is a WSMan shell, and its ShellId is
- * the pool id.
+ * WS-Enumerate over the shell resource, which is how a client finds shells it
+ * did not create. The flat WSMan C API the rest of this client uses covers
+ * shells and commands but not enumeration, so this goes through the WSMan COM
+ * automation interface -- the same one `winrm enumerate` uses.
  *
- * The flat WSMan C API used by the rest of the transport has no enumerate
- * entry point: it covers shells and commands, not WS-Enumerate. The WSMan
- * *automation* API does, through IWSManSession::Enumerate, so that is what
- * this uses. It is the same interface `winrm enumerate` is built on.
- *
- * COM from C is ugly but mechanical: COBJMACROS turns each method into a
- * IFace_Method(this, ...) call through the vtable. The awkwardness is confined
- * to this file; nothing else in the library knows COM exists.
+ * What a caller does with the shells it finds is its own business. PowerShell
+ * puts a RunspacePool id in the ShellId, but that is PSRP's convention and
+ * nothing here relies on it: an identifier is an opaque string.
  */
+
 
 #define COBJMACROS
 #define WIN32_LEAN_AND_MEAN
@@ -25,7 +21,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "psrp/psrp_winrm.h"
+#include "psrp/winrm.h"
 #include "internal/psrp_xml.h"
 
 /* From wsmandisp.idl. Declared here rather than including wsmandisp.h so this
@@ -142,23 +138,33 @@ static bool is_space(char c)
     return c == ' ' || c == '\t' || c == '\r' || c == '\n';
 }
 
-static bool parse_shell_id(const char *v, size_t len, psrp_guid_t *out)
+/* A WS-Management ShellId is an opaque string. The server may return it
+ * braced or padded, so it is normalised here -- but not parsed: that it
+ * happens to hold a GUID is PowerShell's convention, and this layer has no
+ * business assuming it. */
+static bool parse_shell_id(const char *v, size_t len, char **out)
 {
-    char buf[PSRP_GUID_STR_LEN + 1];
+    char *copy;
 
     while (len && is_space(v[0])) { v++; len--; }
     while (len && is_space(v[len - 1])) len--;
     if (len >= 2 && v[0] == '{' && v[len - 1] == '}') { v++; len -= 2; }
+    if (!len) return false;
 
-    if (len != PSRP_GUID_STR_LEN) return false;
-    memcpy(buf, v, len);
-    buf[len] = '\0';
-    return psrp_guid_parse(buf, out) == PSRP_OK;
+    copy = (char *)malloc(len + 1);
+    if (!copy) return false;
+    memcpy(copy, v, len);
+    copy[len] = '\0';
+
+    free(*out);
+    *out = copy;
+    return true;
 }
 
-void psrp_shell_info_free(psrp_shell_info_t *s)
+void winrm_shell_info_free(winrm_shell_info_t *s)
 {
     if (!s) return;
+    free(s->shell_id);
     free(s->name);
     free(s->owner);
     free(s->state);
@@ -166,16 +172,16 @@ void psrp_shell_info_free(psrp_shell_info_t *s)
     memset(s, 0, sizeof *s);
 }
 
-void psrp_shell_info_free_all(psrp_shell_info_t *list, size_t count)
+void winrm_shell_info_free_all(winrm_shell_info_t *list, size_t count)
 {
     size_t i;
     if (!list) return;
-    for (i = 0; i < count; i++) psrp_shell_info_free(&list[i]);
+    for (i = 0; i < count; i++) winrm_shell_info_free(&list[i]);
     free(list);
 }
 
-psrp_result_t psrp_wsman_parse_shell(const void *xml, size_t n,
-                                     psrp_shell_info_t *out)
+psrp_result_t winrm_parse_shell(const void *xml, size_t n,
+                                     winrm_shell_info_t *out)
 {
     psrp_xml_reader_t *r = NULL;
     psrp_result_t rc;
@@ -206,7 +212,7 @@ psrp_result_t psrp_wsman_parse_shell(const void *xml, size_t n,
             if (!v) continue;
 
             if (strcmp(pending, "ShellId") == 0) {
-                /* The ShellId is the RunspacePool id, and it is what makes an
+                /* A shell with no identifier cannot be addressed, which makes an
                  * entry useful; anything else is decoration. */
                 if (parse_shell_id(v, len, &out->shell_id)) have_id = true;
             } else if (strcmp(pending, "Name") == 0 && !out->name) {
@@ -229,13 +235,13 @@ psrp_result_t psrp_wsman_parse_shell(const void *xml, size_t n,
     psrp_xml_reader_free(r);
 
     if (rc != PSRP_OK && rc != PSRP_ERR_XML) {
-        psrp_shell_info_free(out);
+        winrm_shell_info_free(out);
         return rc;
     }
     if (!have_id) {
         /* A shell element with no ShellId cannot be connected to, so reporting
          * it would only hand the caller an entry it cannot use. */
-        psrp_shell_info_free(out);
+        winrm_shell_info_free(out);
         return PSRP_ERR_MALFORMED;
     }
     return PSRP_OK;
@@ -285,7 +291,7 @@ static BSTR bstr_of(const char *utf8)
  * So this is an efficiency measure, not a workaround: listing in a loop through
  * one-shot calls holds handles for no reason. See TODO PSRP-14.
  */
-struct psrp_discovery {
+struct winrm_enumerator {
     bool com_started;
     IWSManEx *wsman;
     IWSManConnOpt *opts;
@@ -293,7 +299,7 @@ struct psrp_discovery {
     IWSManSession *session;
 };
 
-void psrp_wsman_discovery_free(psrp_discovery_t *d)
+void winrm_enumerator_free(winrm_enumerator_t *d)
 {
     if (!d) return;
     if (d->session) d->session->lpVtbl->Release(d->session);
@@ -306,17 +312,17 @@ void psrp_wsman_discovery_free(psrp_discovery_t *d)
     free(d);
 }
 
-psrp_result_t psrp_wsman_discovery_open(const psrp_wsman_config_t *cfg,
-                                        psrp_discovery_t **out)
+psrp_result_t winrm_enumerator_open(const winrm_config_t *cfg,
+                                        winrm_enumerator_t **out)
 {
-    psrp_discovery_t *d;
+    winrm_enumerator_t *d;
     HRESULT hr;
     BSTR connection = NULL;
 
     if (!cfg || !out) return PSRP_ERR_INVALID_ARG;
     *out = NULL;
 
-    d = (psrp_discovery_t *)calloc(1, sizeof *d);
+    d = (winrm_enumerator_t *)calloc(1, sizeof *d);
     if (!d) return PSRP_ERR_NOMEM;
 
     /* Apartment-threaded, and tolerate an apartment the caller already set up:
@@ -376,12 +382,12 @@ psrp_result_t psrp_wsman_discovery_open(const psrp_wsman_config_t *cfg,
     return PSRP_OK;
 
 fail:
-    psrp_wsman_discovery_free(d);
+    winrm_enumerator_free(d);
     return PSRP_ERR_TRANSPORT;
 }
 
-psrp_result_t psrp_wsman_discovery_shells(psrp_discovery_t *d,
-                                          psrp_shell_info_t **out,
+psrp_result_t winrm_enumerator_shells(winrm_enumerator_t *d,
+                                          winrm_shell_info_t **out,
                                           size_t *count)
 {
     HRESULT hr;
@@ -389,7 +395,7 @@ psrp_result_t psrp_wsman_discovery_shells(psrp_discovery_t *d,
     VARIANT uri_var;
     void *result_disp = NULL;
     IWSManEnumerator *en = NULL;
-    psrp_shell_info_t *list = NULL;
+    winrm_shell_info_t *list = NULL;
     size_t used = 0, cap = 0;
     psrp_result_t rc = PSRP_ERR_TRANSPORT;
 
@@ -419,7 +425,7 @@ psrp_result_t psrp_wsman_discovery_shells(psrp_discovery_t *d,
         BSTR item = NULL;
         int utf8_len;
         char *utf8;
-        psrp_shell_info_t info;
+        winrm_shell_info_t info;
 
         hr = en->lpVtbl->get_AtEndOfStream(en, &eos);
         if (FAILED(hr) || eos != VARIANT_FALSE) break;
@@ -433,13 +439,13 @@ psrp_result_t psrp_wsman_discovery_shells(psrp_discovery_t *d,
         if (utf8) {
             WideCharToMultiByte(CP_UTF8, 0, item, -1, utf8, utf8_len, NULL,
                                 NULL);
-            if (psrp_wsman_parse_shell(utf8, strlen(utf8), &info) == PSRP_OK) {
+            if (winrm_parse_shell(utf8, strlen(utf8), &info) == PSRP_OK) {
                 if (used == cap) {
                     size_t next = cap ? cap * 2 : 8;
-                    psrp_shell_info_t *grown = (psrp_shell_info_t *)
+                    winrm_shell_info_t *grown = (winrm_shell_info_t *)
                         realloc(list, next * sizeof *grown);
                     if (!grown) {
-                        psrp_shell_info_free(&info);
+                        winrm_shell_info_free(&info);
                         free(utf8);
                         SysFreeString(item);
                         rc = PSRP_ERR_NOMEM;
@@ -461,7 +467,7 @@ psrp_result_t psrp_wsman_discovery_shells(psrp_discovery_t *d,
     rc = PSRP_OK;
 
 done:
-    psrp_shell_info_free_all(list, used);
+    winrm_shell_info_free_all(list, used);
     if (en) en->lpVtbl->Release(en);
     if (result_disp)
         ((IUnknown *)result_disp)->lpVtbl->Release((IUnknown *)result_disp);
@@ -469,17 +475,17 @@ done:
     return rc;
 }
 
-psrp_result_t psrp_wsman_enumerate_shells(const psrp_wsman_config_t *cfg,
-                                          psrp_shell_info_t **out,
+psrp_result_t winrm_enumerate_shells(const winrm_config_t *cfg,
+                                          winrm_shell_info_t **out,
                                           size_t *count)
 {
-    psrp_discovery_t *d = NULL;
+    winrm_enumerator_t *d = NULL;
     psrp_result_t rc;
 
     if (!cfg || !out || !count) return PSRP_ERR_INVALID_ARG;
-    rc = psrp_wsman_discovery_open(cfg, &d);
+    rc = winrm_enumerator_open(cfg, &d);
     if (rc != PSRP_OK) return rc;
-    rc = psrp_wsman_discovery_shells(d, out, count);
-    psrp_wsman_discovery_free(d);
+    rc = winrm_enumerator_shells(d, out, count);
+    winrm_enumerator_free(d);
     return rc;
 }

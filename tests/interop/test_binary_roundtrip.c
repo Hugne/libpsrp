@@ -38,7 +38,7 @@
 
 #include "psrp/psrp.h"
 #include "psrp/psrp_session.h"
-#include "psrp/psrp_winrm.h"
+#include "psrp/psrp_transport.h"
 #include "psrp/psrp_records.h"
 
 /* The lab's sizes, unchanged. */
@@ -223,7 +223,7 @@ done:
 int main(void)
 {
     const char *enabled = getenv("PSRP_INTEROP");
-    psrp_wsman_config_t cfg;
+    winrm_config_t cfg;
     psrp_transport_t *t = NULL;
     psrp_session_t *s = NULL;
     psrp_buffer_t start;
@@ -248,7 +248,7 @@ int main(void)
 
     psrp_buffer_init(&start);
 
-    if (psrp_wsman_transport_create(&cfg, &t) != PSRP_OK) {
+    if (psrp_transport_over_winrm(&cfg, &t) != PSRP_OK) {
         printf("FAIL: transport: %s\n", psrp_transport_last_error(t));
         return 1;
     }

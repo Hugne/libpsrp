@@ -25,10 +25,22 @@
 
 #include "psrp/psrp.h"
 #include "psrp/psrp_session.h"
-#include "psrp/psrp_winrm.h"
+#include "psrp/psrp_transport.h"
 #include "psrp/psrp_records.h"
 #include "psrp/psrp_host.h"
 #include "psrp/psrp_metadata.h"
+
+/* WS-Management reports a ShellId as a string; PSRP's pool id is a GUID that
+ * it puts there. Comparing them means formatting one and matching without
+ * regard to case, which is how WinRM returns it. */
+static bool shell_is(const char *shell_id, const psrp_guid_t *pool)
+{
+    char want[PSRP_GUID_BUF_SIZE];
+    if (!shell_id || psrp_guid_format(pool, want, sizeof want) != PSRP_OK)
+        return false;
+    return _stricmp(shell_id, want) == 0;
+}
+
 #include "psrp/psrp_crypto.h"
 
 /* What one section observed, so an assertion can name what was missing. */
@@ -1108,8 +1120,8 @@ static int section_connect_new(psrp_transport_t *t)
      * cannot be confused with the first's. */
     psrp_session_t *s1, *s2 = NULL;
     psrp_transport_t *t2 = NULL;
-    psrp_wsman_config_t cfg;
-    psrp_shell_info_t *shells = NULL;
+    winrm_config_t cfg;
+    winrm_shell_info_t *shells = NULL;
     size_t shell_count = 0, k;
     psrp_guid_t pool_id;
     psrp_buffer_t payload, resp;
@@ -1133,7 +1145,7 @@ static int section_connect_new(psrp_transport_t *t)
         printf("  FAIL: first client's pipeline state %d\n", state);
         goto done;
     }
-    if (psrp_transport_disconnect(t, 120000) != PSRP_OK ||
+    if (winrm_disconnect(psrp_transport_session(t), 120000) != PSRP_OK ||
         psrp_session_notify_disconnected(s1) != PSRP_OK) {
         printf("  FAIL: disconnect: %s\n", psrp_transport_last_error(t));
         goto done;
@@ -1144,12 +1156,12 @@ static int section_connect_new(psrp_transport_t *t)
     cfg.username = getenv("PSRP_USER");
     cfg.password = getenv("PSRP_PASS");
     cfg.operation_timeout_ms = 60000;
-    if (psrp_wsman_enumerate_shells(&cfg, &shells, &shell_count) != PSRP_OK) {
+    if (winrm_enumerate_shells(&cfg, &shells, &shell_count) != PSRP_OK) {
         printf("  FAIL: enumerate\n");
         goto done;
     }
     for (k = 0; k < shell_count; k++) {
-        if (psrp_guid_equal(&shells[k].shell_id, &pool_id)) {
+        if (shell_is(shells[k].shell_id, &pool_id)) {
             found = true;
             printf("  discovered the pool, state %s\n",
                    shells[k].state ? shells[k].state : "<none>");
@@ -1161,7 +1173,7 @@ static int section_connect_new(psrp_transport_t *t)
     }
 
     /* Second client adopts and connects. */
-    if (psrp_wsman_transport_create(&cfg, &t2) != PSRP_OK) {
+    if (psrp_transport_over_winrm(&cfg, &t2) != PSRP_OK) {
         printf("  FAIL: second transport: %s\n", psrp_transport_last_error(t2));
         goto done;
     }
@@ -1174,10 +1186,29 @@ static int section_connect_new(psrp_transport_t *t)
         printf("  FAIL: connect_payload\n");
         goto done;
     }
-    if (psrp_transport_connect(t2, &pool_id, payload.data, payload.len, &resp)
-        != PSRP_OK) {
-        printf("  FAIL: transport_connect: %s\n", psrp_transport_last_error(t2));
-        goto done;
+    /* Adopting someone else's shell is a WinRM operation with no counterpart
+     * in the protocol, so it is reached through the session rather than the
+     * transport. The ShellId is a string there; PSRP's pool id becomes one. */
+    {
+        char pool_sel[PSRP_GUID_BUF_SIZE];
+        size_t ci;
+        if (psrp_guid_format(&pool_id, pool_sel, sizeof pool_sel) != PSRP_OK) {
+            printf("  FAIL: formatting the pool id\n");
+            goto done;
+        }
+        /* Upper case, because the server matches a ShellId case-sensitively
+         * and stored the one our Create sent (TODO PSRP-24). This stands in
+         * for a second client adopting the pool, so it has to spell the
+         * identifier the way the first client did. */
+        for (ci = 0; pool_sel[ci]; ci++)
+            if (pool_sel[ci] >= 'a' && pool_sel[ci] <= 'f')
+                pool_sel[ci] = (char)(pool_sel[ci] - 'a' + 'A');
+        if (winrm_connect(psrp_transport_session(t2), pool_sel, payload.data,
+                          payload.len, &resp) != PSRP_OK) {
+            printf("  FAIL: winrm_connect: %s\n",
+                   psrp_transport_last_error(t2));
+            goto done;
+        }
     }
 
     /* 3.1.5.3.15: the server's SESSION_CAPABILITY came back inside the
@@ -1234,7 +1265,7 @@ static int section_connect_new(psrp_transport_t *t)
     bad = 0;
 
 done:
-    psrp_shell_info_free_all(shells, shell_count);
+    winrm_shell_info_free_all(shells, shell_count);
     if (t2) (void)psrp_transport_close_shell(t2);
     psrp_session_free(s2);
     psrp_transport_free(t2);
@@ -1277,7 +1308,7 @@ static int section_disconnect_running(psrp_transport_t *t)
         goto done;
     }
 
-    if (psrp_transport_disconnect(t, 120000) != PSRP_OK ||
+    if (winrm_disconnect(psrp_transport_session(t), 120000) != PSRP_OK ||
         psrp_session_notify_disconnected(s) != PSRP_OK) {
         printf("  FAIL: disconnect: %s\n", psrp_transport_last_error(t));
         goto done;
@@ -1285,7 +1316,7 @@ static int section_disconnect_running(psrp_transport_t *t)
     printf("  disconnected with the pipeline running\n");
     Sleep(4500);                        /* let it finish unobserved */
 
-    if (psrp_transport_reconnect(t) != PSRP_OK ||
+    if (winrm_reconnect(psrp_transport_session(t)) != PSRP_OK ||
         psrp_session_notify_reconnected(s) != PSRP_OK) {
         printf("  FAIL: reconnect: %s\n", psrp_transport_last_error(t));
         goto done;
@@ -1420,7 +1451,7 @@ int main(int argc, char **argv)
 {
     const char *enabled = getenv("PSRP_INTEROP");
     const char *only = argc > 1 ? argv[1] : NULL;
-    psrp_wsman_config_t cfg;
+    winrm_config_t cfg;
     psrp_transport_t *t = NULL;
     int status = 0;
     size_t i;
@@ -1443,7 +1474,7 @@ int main(int argc, char **argv)
 
         /* A fresh transport per section, so one section's wreckage cannot be
          * mistaken for the next one's failure. */
-        if (psrp_wsman_transport_create(&cfg, &t) != PSRP_OK) {
+        if (psrp_transport_over_winrm(&cfg, &t) != PSRP_OK) {
             printf("FAIL: transport create: %s\n",
                    psrp_transport_last_error(t));
             status = 1;

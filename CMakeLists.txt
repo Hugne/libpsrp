@@ -68,6 +68,7 @@ add_library(psrp STATIC
   src/proto/timezone.c
   src/proto/invocation.c
   src/proto/keyexchange_msg.c
+  src/transport/psrp_over_winrm.c
   src/crypto/crypto_shared.c
   src/state/hostvalues.c
   src/state/hostparams.c
@@ -89,8 +90,8 @@ if(WIN32)
     src/xml/xml_xmllite.c
     src/platform/random_win.c
     src/crypto/crypto_cng.c
-    src/transport/transport_wsman.c
-    src/transport/enumerate_wsman.c
+    src/transport/winrm_wsman.c
+    src/transport/winrm_enumerate.c
     src/client/client.c
   )
   target_link_libraries(psrp PUBLIC xmllite bcrypt WsmSvc ole32 oleaut32)
@@ -110,7 +111,7 @@ else()
     src/xml/xml_libxml2.c
     src/platform/random_posix.c
     src/crypto/crypto_openssl.c
-    src/transport/transport_curl.c
+    src/transport/winrm_curl.c
     src/client/client.c
   )
 

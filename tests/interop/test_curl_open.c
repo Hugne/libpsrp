@@ -16,7 +16,7 @@
 
 #include "psrp/psrp.h"
 #include "psrp/psrp_session.h"
-#include "psrp/psrp_winrm.h"
+#include "psrp/psrp_transport.h"
 #include "psrp/psrp_records.h"
 
 static int failures;
@@ -30,7 +30,7 @@ static void check(int ok, const char *what)
 int main(void)
 {
     const char *enabled = getenv("PSRP_INTEROP");
-    psrp_wsman_config_t cfg;
+    winrm_config_t cfg;
     psrp_transport_t *t = NULL;
     psrp_session_t *s = NULL;
     psrp_buffer_t payload;
@@ -51,7 +51,7 @@ int main(void)
     printf("curl transport against %s\n",
            cfg.connection ? cfg.connection : "http://localhost:5985/wsman");
 
-    rc = psrp_wsman_transport_create(&cfg, &t);
+    rc = psrp_transport_over_winrm(&cfg, &t);
     if (rc != PSRP_OK) {
         printf("  FAIL: transport create: %s\n", psrp_transport_last_error(t));
         return 1;
@@ -167,7 +167,7 @@ int main(void)
     }
 
     /* Still deliberately absent; it must say so rather than appear to work. */
-    rc = psrp_transport_disconnect(t, 0);
+    rc = winrm_disconnect(psrp_transport_session(t), 0);
     check(rc == PSRP_ERR_UNSUPPORTED,
           "disconnect reports UNSUPPORTED rather than failing silently");
 

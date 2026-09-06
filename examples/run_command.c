@@ -25,7 +25,7 @@
 
 #include "psrp/psrp.h"
 #include "psrp/psrp_session.h"
-#include "psrp/psrp_winrm.h"
+#include "psrp/psrp_transport.h"
 
 /* Moves bytes from the transport into the session and drains what comes out.
  * Returns the state of the first event of `want`, or -1 if it never arrives.
@@ -72,7 +72,7 @@ static int pump(psrp_session_t *s, psrp_transport_t *t, psrp_event_kind_t want,
 
 int main(int argc, char **argv)
 {
-    psrp_wsman_config_t cfg;
+    winrm_config_t cfg;
     psrp_transport_t *t = NULL;
     psrp_session_t *s = NULL;
     psrp_command_t *cmd = NULL;
@@ -103,7 +103,7 @@ int main(int argc, char **argv)
 
     psrp_buffer_init(&payload);
 
-    if (psrp_wsman_transport_create(&cfg, &t) != PSRP_OK) {
+    if (psrp_transport_over_winrm(&cfg, &t) != PSRP_OK) {
         fprintf(stderr, "connect: %s\n", psrp_transport_last_error(t));
         goto done;
     }
