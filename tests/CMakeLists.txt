@@ -121,6 +121,15 @@ if(NOT WIN32)
   add_test(NAME interop.test_kerberos COMMAND test_kerberos)
   set_tests_properties(interop.test_kerberos PROPERTIES LABELS "interop" TIMEOUT 300)
 
+  # Adopting a disconnected pool: the second half of MS-WSMV's disconnected
+  # shells, and the only exercise winrm_connect gets on this platform.
+  add_executable(test_curl_connect interop/test_curl_connect.c)
+  target_link_libraries(test_curl_connect PRIVATE psrp psrp_flags)
+  target_include_directories(test_curl_connect PRIVATE ${CMAKE_SOURCE_DIR}/src)
+  add_test(NAME interop.test_curl_connect COMMAND test_curl_connect)
+  set_tests_properties(interop.test_curl_connect
+                       PROPERTIES LABELS "interop" TIMEOUT 300)
+
   add_executable(test_curl_open interop/test_curl_open.c)
   target_link_libraries(test_curl_open PRIVATE psrp psrp_flags)
   target_include_directories(test_curl_open PRIVATE ${CMAKE_SOURCE_DIR}/src)

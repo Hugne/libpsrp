@@ -174,10 +174,23 @@ int main(void)
         psrp_buffer_free(&text);
     }
 
-    /* Still deliberately absent; it must say so rather than appear to work. */
-    rc = winrm_disconnect(psrp_transport_session(t), 0);
-    check(rc == PSRP_ERR_UNSUPPORTED,
-          "disconnect reports UNSUPPORTED rather than failing silently");
+    /* Disconnect and come back to the same shell. The assertion that means
+     * anything is the one after the reconnect: a shell that is still there
+     * accepts an operation naming it, and one the server tore down answers
+     * that it was not found. */
+    rc = winrm_disconnect(psrp_transport_session(t), 120000);
+    if (rc != PSRP_OK)
+        printf("    disconnect failed: %s\n",
+               psrp_transport_last_error(t));
+    check(rc == PSRP_OK, "shell disconnected");
+
+    if (rc == PSRP_OK) {
+        rc = winrm_reconnect(psrp_transport_session(t));
+        if (rc != PSRP_OK)
+            printf("    reconnect failed: %s\n",
+                   psrp_transport_last_error(t));
+        check(rc == PSRP_OK, "and reconnected to the same shell");
+    }
 
     rc = psrp_transport_close_shell(t);
     if (rc != PSRP_OK)

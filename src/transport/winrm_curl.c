@@ -7,7 +7,7 @@
  * Nothing here knows what travels on the streams it moves. PSRP's use of this
  * client lives in psrp_over_winrm.c.
  *
- * Seven things about this are not obvious and were each established the hard
+ * Eight things about this are not obvious and were each established the hard
  * way against a live server. They are the reason this file looks the way it
  * does, so they are recorded here rather than in a commit nobody will read:
  *
@@ -68,6 +68,17 @@
  *     is what the four-byte length in front of it is describing. The symptom
  *     of getting this wrong is an empty HTTP 400 and "couldn't decrypt the
  *     packet" in the server's event log.
+ *
+ *  8. A shell is disconnectable only if the client identified itself. WinRM
+ *     refuses a Disconnect on a shell created without the wsmv:SessionId
+ *     header, and says so as "this WinRS shell instance does not support
+ *     disconnect and reconnect operations because it was created by an older
+ *     WinRS client" -- which sounds like a version negotiation and is not:
+ *     nothing about the protocolversion option changes it. Disconnecting is
+ *     defined as leaving a shell for the same client to come back to, so the
+ *     server needs a client identity to attach it to, and with no SessionId
+ *     there is none. One GUID generated per session and sent on every request
+ *     is the whole fix.
  *
  * Two environment variables make the above debuggable when it goes wrong
  * again: PSRP_GSS_TRACE reports each authentication round and the size of
@@ -175,6 +186,10 @@ struct winrm_session {
      * request is refused with "the shell was not found on the server" --
      * which reads as the shell having died rather than as a naming
      * difference. */
+    /* MS-WSMV 2.2.4.10, and the reason a shell is disconnectable; see the
+     * comment in envelope_head. Generated once per session. */
+    char session_id[PSRP_GUID_BUF_SIZE + 8];
+
     char shell_sel[64];
     bool have_shell;
     char cmd_sel[64];   /* the CommandId the server reports back */
@@ -723,9 +738,11 @@ static psrp_result_t envelope_head(winrm_session_t *t, psrp_buffer_t *b,
             "</wsman:MaxEnvelopeSize>"
         "<wsa:MessageID>uuid:%s</wsa:MessageID>"
         "<wsman:Locale xml:lang=\"en-US\" s:mustUnderstand=\"false\"/>"
+        "<p:SessionId s:mustUnderstand=\"false\">uuid:%s</p:SessionId>"
         "<wsman:OperationTimeout>PT%u.000S</wsman:OperationTimeout>"
         "%s%s%s",
-        t->url, action, MAX_ENVELOPE_SIZE, msgid, t->timeout_ms / 1000u,
+        t->url, action, MAX_ENVELOPE_SIZE, msgid, t->session_id,
+        t->timeout_ms / 1000u,
         with_shell ? "<wsman:SelectorSet><wsman:Selector Name=\"ShellId\">" : "",
         with_shell ? shell : "",
         with_shell ? "</wsman:Selector></wsman:SelectorSet>" : "");
@@ -758,6 +775,17 @@ psrp_result_t winrm_session_open(const winrm_config_t *cfg,
     psrp_buffer_init(&t->rx);
     psrp_buffer_init(&t->resp);
     t->gss = GSS_C_NO_CONTEXT;
+
+    /* One identity for the life of this client, sent on every request. */
+    {
+        psrp_guid_t sid;
+        if (psrp_guid_generate(&sid) != PSRP_OK ||
+            psrp_guid_format(&sid, t->session_id, sizeof t->session_id)
+                != PSRP_OK) {
+            free(t);
+            return PSRP_ERR_INTERNAL;
+        }
+    }
     t->cred = GSS_C_NO_CREDENTIAL;
     t->target = GSS_C_NO_NAME;
     t->timeout_ms = (cfg && cfg->operation_timeout_ms)
@@ -958,20 +986,81 @@ static psrp_result_t collect_streams(winrm_session_t *t, const char *xml,
     return rc;
 }
 
+/* Appends the text of the first element with this local name to `out`.
+ *
+ * The text is COPIED. psrp_xml_value points into the reader, so returning
+ * that pointer to a caller who reads it after the reader is freed is a
+ * use-after-free -- one this function existed in exactly that shape long
+ * enough to corrupt a ShellId and produce an HTTP 400 that looked like a
+ * decryption failure.
+ *
+ * Namespace-blind on purpose: these responses put the element we want in
+ * whichever namespace the operation belongs to, and the local name is
+ * unambiguous within one reply. */
+static psrp_result_t element_text(const void *xml, size_t n, const char *want,
+                                  psrp_buffer_t *out)
+{
+    psrp_xml_reader_t *r = NULL;
+    psrp_xml_node_t node;
+    bool in_it = false;
+    psrp_result_t rc = PSRP_ERR_NOT_FOUND;
+
+    if (psrp_xml_reader_create(xml, n, &r) != PSRP_OK) return PSRP_ERR_XML;
+
+    while (psrp_xml_read(r, &node) == PSRP_OK && node != PSRP_XML_EOF) {
+        if (node == PSRP_XML_ELEMENT) {
+            in_it = strcmp(psrp_xml_local_name(r), want) == 0;
+        } else if (node == PSRP_XML_TEXT && in_it) {
+            size_t vlen = 0;
+            const char *v = psrp_xml_value(r, &vlen);
+            if (vlen) rc = psrp_buffer_append(out, v, vlen);
+            break;
+        } else {
+            in_it = false;
+        }
+    }
+    psrp_xml_reader_free(r);
+    return rc;
+}
+
+/* <element xmlns="...powershell">base64</element>, the open content of a
+ * wxf:Create or a wxf:Connect.
+ *
+ * The element name is not decoration: a Create carrying connectXml, or a
+ * Connect carrying creationXml, reaches the PowerShell plugin and comes back
+ * as a .NET exception, because the payload it went looking for is not
+ * there. */
+static psrp_result_t append_open_content(psrp_buffer_t *soap,
+                                         const char *element,
+                                         const void *payload, size_t len)
+{
+    psrp_buffer_t b64;
+    psrp_result_t rc;
+
+    psrp_buffer_init(&b64);
+    rc = psrp_base64_encode_buf(&b64, payload, len);
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(soap, "<");
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(soap, element);
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(soap,
+        " xmlns=\"http://schemas.microsoft.com/powershell\">");
+    if (rc == PSRP_OK) rc = psrp_buffer_append(soap, b64.data, b64.len);
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(soap, "</");
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(soap, element);
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(soap, ">");
+    psrp_buffer_free(&b64);
+    return rc;
+}
+
 psrp_result_t winrm_shell_create(winrm_session_t *t, const char *shell_id,
                                  const void *open_content, size_t len)
 {
-    psrp_buffer_t soap, b64, reply;
+    psrp_buffer_t soap, reply;
     psrp_result_t rc;
 
     if (!t || !shell_id || (len && !open_content)) return PSRP_ERR_INVALID_ARG;
 
     psrp_buffer_init(&soap);
-    psrp_buffer_init(&b64);
     psrp_buffer_init(&reply);
-
-    rc = psrp_base64_encode_buf(&b64, open_content, len);
-    if (rc != PSRP_OK) goto done;
 
     rc = envelope_head(t, &soap, WS_XFER "/Create", false);
     if (rc != PSRP_OK) goto done;
@@ -986,11 +1075,11 @@ psrp_result_t winrm_shell_create(winrm_session_t *t, const char *shell_id,
     if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap, shell_id);
     if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap,
         "\"><rsp:InputStreams>stdin pr</rsp:InputStreams>"
-        "<rsp:OutputStreams>stdout</rsp:OutputStreams>"
-        "<creationXml xmlns=\"http://schemas.microsoft.com/powershell\">");
-    if (rc == PSRP_OK) rc = psrp_buffer_append(&soap, b64.data, b64.len);
+        "<rsp:OutputStreams>stdout</rsp:OutputStreams>");
+    if (rc == PSRP_OK)
+        rc = append_open_content(&soap, "creationXml", open_content, len);
     if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap,
-        "</creationXml></rsp:Shell></s:Body></s:Envelope>");
+        "</rsp:Shell></s:Body></s:Envelope>");
     if (rc == PSRP_OK) rc = psrp_buffer_append_u8(&soap, 0);
     if (rc != PSRP_OK) goto done;
 
@@ -1001,35 +1090,20 @@ psrp_result_t winrm_shell_create(winrm_session_t *t, const char *shell_id,
      * is usually the same, but "usually" is not a basis for every later
      * selector, and a mismatch surfaces as the shell having vanished. */
     {
-        psrp_xml_reader_t *r = NULL;
-        psrp_xml_node_t node;
-        bool want_text = false;
+        psrp_buffer_t id;
 
+        psrp_buffer_init(&id);
         snprintf(t->shell_sel, sizeof t->shell_sel, "%s", shell_id);
-        if (psrp_xml_reader_create(reply.data, reply.len, &r) == PSRP_OK) {
-            while (psrp_xml_read(r, &node) == PSRP_OK && node != PSRP_XML_EOF) {
-                if (node == PSRP_XML_ELEMENT &&
-                    strcmp(psrp_xml_local_name(r), "ShellId") == 0) {
-                    want_text = true;
-                } else if (node == PSRP_XML_TEXT && want_text) {
-                    size_t vlen = 0;
-                    const char *v = psrp_xml_value(r, &vlen);
-                    if (vlen && vlen < sizeof t->shell_sel)
-                        snprintf(t->shell_sel, sizeof t->shell_sel, "%.*s",
-                                 (int)vlen, v);
-                    break;
-                } else {
-                    want_text = false;
-                }
-            }
-            psrp_xml_reader_free(r);
-        }
+        if (element_text(reply.data, reply.len, "ShellId", &id) == PSRP_OK &&
+            id.len && id.len < sizeof t->shell_sel)
+            snprintf(t->shell_sel, sizeof t->shell_sel, "%.*s",
+                     (int)id.len, (const char *)id.data);
+        psrp_buffer_free(&id);
     }
     t->have_shell = true;
 
 done:
     psrp_buffer_free(&soap);
-    psrp_buffer_free(&b64);
     psrp_buffer_free(&reply);
     return rc;
 }
@@ -1270,32 +1344,147 @@ psrp_result_t winrm_signal(winrm_session_t *t, winrm_signal_t code)
     return rc;
 }
 
-/* ---------------------------------------------------- not ported yet --- */
+/* -------------------------------------------- disconnected shells --- */
 /*
- * These answer PSRP_ERR_UNSUPPORTED rather than pretending. The Windows
- * client implements all of them; TODO PSRP-35 records the order this is
- * being built in. An absent operation that says so is recoverable; one that
- * silently does nothing is not.
+ * The Windows client cancels its standing Receive before disconnecting, per
+ * 3.1.4.9 step 1. Here there is nothing to cancel: every operation is one
+ * synchronous request and response, so no operation is ever outstanding when
+ * control reaches these functions.
  */
 
 psrp_result_t winrm_disconnect(winrm_session_t *t, uint32_t idle_timeout_ms)
 {
-    (void)idle_timeout_ms;
-    set_error(t, "disconnect", "not in this client yet");
-    return PSRP_ERR_UNSUPPORTED;
+    psrp_buffer_t soap, reply;
+    char idle[96];
+    psrp_result_t rc;
+
+    if (!t) return PSRP_ERR_INVALID_ARG;
+    if (!t->have_shell) return PSRP_ERR_STATE;
+    if (t->disconnected) return PSRP_ERR_STATE;
+
+    psrp_buffer_init(&soap);
+    psrp_buffer_init(&reply);
+
+    /* Zero means "whatever the server's default is", which is expressed by
+     * leaving the element out rather than by sending PT0S -- that would ask
+     * for a shell that expires immediately. */
+    idle[0] = '\0';
+    if (idle_timeout_ms)
+        snprintf(idle, sizeof idle,
+                 "<rsp:IdleTimeOut>PT%u.%03uS</rsp:IdleTimeOut>",
+                 idle_timeout_ms / 1000u, idle_timeout_ms % 1000u);
+
+    rc = envelope_head(t, &soap, WS_SHELL "/Disconnect", true);
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap,
+        "</s:Header><s:Body><rsp:Disconnect>");
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap, idle);
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap,
+        "</rsp:Disconnect></s:Body></s:Envelope>");
+    if (rc == PSRP_OK) rc = psrp_buffer_append_u8(&soap, 0);
+    if (rc != PSRP_OK) goto done;
+
+    rc = soap_call(t, (const char *)soap.data, &reply);
+    if (rc == PSRP_OK) t->disconnected = true;
+
+done:
+    psrp_buffer_free(&soap);
+    psrp_buffer_free(&reply);
+    return rc;
 }
 
 psrp_result_t winrm_reconnect(winrm_session_t *t)
 {
-    set_error(t, "reconnect", "not in this client yet");
-    return PSRP_ERR_UNSUPPORTED;
+    psrp_buffer_t soap, reply;
+    psrp_result_t rc;
+
+    if (!t) return PSRP_ERR_INVALID_ARG;
+    if (!t->have_shell) return PSRP_ERR_STATE;
+    if (!t->disconnected) return PSRP_ERR_STATE;
+
+    psrp_buffer_init(&soap);
+    psrp_buffer_init(&reply);
+
+    rc = envelope_head(t, &soap, WS_SHELL "/Reconnect", true);
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap,
+        "</s:Header><s:Body></s:Body></s:Envelope>");
+    if (rc == PSRP_OK) rc = psrp_buffer_append_u8(&soap, 0);
+    if (rc != PSRP_OK) goto done;
+
+    rc = soap_call(t, (const char *)soap.data, &reply);
+    if (rc != PSRP_OK) goto done;
+    t->disconnected = false;
+
+    /* The Windows client has to reattach the command handle here, because a
+     * handle is a live object there. A CommandId is only a selector on this
+     * side, so the next Receive naming it resumes the pipeline by itself and
+     * there is nothing to reattach. */
+
+done:
+    psrp_buffer_free(&soap);
+    psrp_buffer_free(&reply);
+    return rc;
 }
 
 psrp_result_t winrm_connect(winrm_session_t *t, const char *shell_id,
                             const void *open_content, size_t len,
                             psrp_buffer_t *response_content)
 {
-    (void)shell_id; (void)open_content; (void)len; (void)response_content;
-    set_error(t, "connect", "not in this client yet");
-    return PSRP_ERR_UNSUPPORTED;
+    psrp_buffer_t soap, reply;
+    psrp_result_t rc;
+
+    if (!t || !shell_id || (len && !open_content)) return PSRP_ERR_INVALID_ARG;
+    if (t->have_shell) return PSRP_ERR_STATE;
+
+    psrp_buffer_init(&soap);
+    psrp_buffer_init(&reply);
+
+    /* The selector is the shell being adopted, so it has to be in place
+     * before the envelope header is built. Kept verbatim: what a ShellId
+     * looks like is the caller's business, and the server matches it
+     * exactly. */
+    snprintf(t->shell_sel, sizeof t->shell_sel, "%s", shell_id);
+
+    rc = envelope_head(t, &soap, WS_SHELL "/Connect", true);
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap,
+        "</s:Header><s:Body><rsp:Connect>");
+    /* No OptionSet, unlike a Create: see TODO PSRP-25. Any option sent with
+     * mustComply on a Connect is rejected, and the version the option would
+     * carry was already negotiated when the shell was created. */
+    if (rc == PSRP_OK)
+        rc = append_open_content(&soap, "connectXml", open_content, len);
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(&soap,
+        "</rsp:Connect></s:Body></s:Envelope>");
+    if (rc == PSRP_OK) rc = psrp_buffer_append_u8(&soap, 0);
+    if (rc != PSRP_OK) goto done;
+
+    rc = soap_call(t, (const char *)soap.data, &reply);
+    if (rc != PSRP_OK) goto done;
+
+    if (response_content) {
+        /* 3.1.5.3.15 puts the server's answer in the response's open content
+         * and nowhere else, so a response without it is a failed connect
+         * however cheerful its status was. */
+        psrp_buffer_t b64;
+
+        psrp_buffer_init(&b64);
+        rc = element_text(reply.data, reply.len, "connectResponseXml", &b64);
+        if (rc != PSRP_OK) {
+            psrp_buffer_free(&b64);
+            set_error(t, "connect", "response carried no connectResponseXml");
+            rc = PSRP_ERR_MALFORMED;
+            goto done;
+        }
+        rc = psrp_base64_decode((const char *)b64.data, b64.len,
+                                response_content);
+        psrp_buffer_free(&b64);
+        if (rc != PSRP_OK) goto done;
+    }
+    t->have_shell = true;
+    t->disconnected = false;
+
+done:
+    if (rc != PSRP_OK) t->shell_sel[0] = '\0';
+    psrp_buffer_free(&soap);
+    psrp_buffer_free(&reply);
+    return rc;
 }
