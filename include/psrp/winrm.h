@@ -171,16 +171,13 @@ psrp_result_t winrm_connect(winrm_session_t *s, const char *shell_id,
 bool winrm_is_disconnected(const winrm_session_t *s);
 
 /* ------------------------------------------------ enumerating shells --- */
-#if defined(_WIN32)
 /**
  * WS-Enumerate over the shell resource, which is how a client finds shells it
  * did not create.
  *
- * Declared only where it is implemented, deliberately. There is no
- * WS-Enumerate in the curl implementation yet, and a declaration without a
- * definition turns a missing feature into an unresolved symbol at link time
- * with nothing to explain it. This way the call site fails to compile and
- * says what it wanted.
+ * Both backends implement it: the WSMan COM automation interface on Windows,
+ * because the flat WSMan C API does not cover enumeration, and SOAP over
+ * libcurl elsewhere. A record is parsed the same way either way.
  */
 typedef struct winrm_shell_info {
     char *shell_id;
@@ -212,7 +209,6 @@ void winrm_shell_info_free_all(winrm_shell_info_t *list, size_t count);
  * parsing can be tested without a server. */
 psrp_result_t winrm_parse_shell(const void *xml, size_t n,
                                 winrm_shell_info_t *out);
-#endif /* _WIN32 */
 
 #ifdef __cplusplus
 }

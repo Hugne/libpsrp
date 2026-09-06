@@ -25,8 +25,9 @@ deferral and every place the spec and real PowerShell disagree.
 - Command metadata (`GET_COMMAND_METADATA`).
 - User events, application private data, runspace availability.
 - Disconnect, reconnect and connect, on both platforms.
-- Shell enumeration — **Windows only**; it uses the WSMan COM automation
-  interface and has no WS-Enumerate implementation yet.
+- Shell enumeration: the WSMan COM automation interface on Windows, because
+  the flat WSMan C API does not cover it, and WS-Enumerate over SOAP
+  elsewhere.
 
 Authentication is NTLM, Kerberos or SPNEGO. On Linux, Kerberos works from a
 ticket cache with no password in the process; message encryption is on for
@@ -75,8 +76,8 @@ have to become conditional on what was negotiated. See TODO PSRP-28.
 ## Requirements
 
 **Windows.** The transport is the Win32 WSMan client (`WsmSvc`), crypto is CNG
-(`bcrypt`), XML is XmlLite, and shell enumeration uses the WSMan COM
-automation interface (`ole32`, `oleaut32`). No external dependencies.
+(`bcrypt`), XML is XmlLite, and enumeration uses the WSMan COM automation
+interface (`ole32`, `oleaut32`). No external dependencies.
 
 **Linux.** libxml2, OpenSSL, libcurl and MIT Kerberos. NTLM additionally needs
 the `gss-ntlmssp` mechanism installed at run time; Kerberos does not.
@@ -151,9 +152,6 @@ constructor, shells, commands, named streams, signals, the
 disconnect/reconnect/connect operations, and enumeration. It knows nothing
 about PowerShell — identifiers are opaque strings — and everything specific to
 PSRP's use of it lives in `src/transport/psrp_over_winrm.c`.
-
-Enumeration is declared only on the platform that implements it, so a Linux
-call site fails to compile naming the function, rather than failing to link.
 
 ## Testing
 
@@ -267,8 +265,9 @@ for people reading it, not for publication.
 - `src/state/` — the client state machine (no I/O).
 - `src/client/` — the convenience layer, built on the public API.
 - `src/transport/` — `winrm_wsman.c` (Win32 WSMan client), `winrm_curl.c`
-  (libcurl + GSS-API), `winrm_enumerate.c` (WSMan COM), and
-  `psrp_over_winrm.c`, the only file that speaks both vocabularies.
+  (libcurl + GSS-API), `winrm_enumerate.c` (WSMan COM), `winrm_shell_info.c`
+  (the shell records both enumerations return), and `psrp_over_winrm.c`, the
+  only file that speaks both vocabularies.
 - `src/xml/` — XmlLite and libxml2 behind one pull-parser seam.
 - `src/crypto/` — CNG and OpenSSL behind one seam, with the shared half
   factored out.

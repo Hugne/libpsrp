@@ -69,6 +69,7 @@ add_library(psrp STATIC
   src/proto/invocation.c
   src/proto/keyexchange_msg.c
   src/transport/psrp_over_winrm.c
+  src/transport/winrm_shell_info.c
   src/crypto/crypto_shared.c
   src/state/hostvalues.c
   src/state/hostparams.c

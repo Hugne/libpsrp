@@ -78,22 +78,26 @@ static void drain_events(psrp_session_t *s)
     while (psrp_session_next_event(s, &e) == PSRP_OK) psrp_event_free(&e);
 }
 
-#ifdef _WIN32
-#  define PSRP_TEST_HAVE_ENUMERATE 1
-#endif
-
-#ifdef PSRP_TEST_HAVE_ENUMERATE
 /* WS-Management reports a ShellId as a string; PSRP's pool id is a GUID that
  * it puts there. Comparing them means formatting one and matching without
- * regard to case, which is how WinRM returns it. */
+ * regard to case, which is how WinRM returns it. ASCII-only on purpose: a
+ * GUID's alphabet is, and _stricmp/strcasecmp are spelled differently per
+ * platform for no benefit here. */
 static bool shell_is(const char *shell_id, const psrp_guid_t *pool)
 {
     char want[PSRP_GUID_BUF_SIZE];
+    size_t i;
+
     if (!shell_id || psrp_guid_format(pool, want, sizeof want) != PSRP_OK)
         return false;
-    return _stricmp(shell_id, want) == 0;
+    for (i = 0; want[i] && shell_id[i]; i++) {
+        char a = shell_id[i], b = want[i];
+        if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+        if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
+        if (a != b) return false;
+    }
+    return want[i] == shell_id[i];
 }
-#endif
 
 int main(void)
 {
@@ -201,7 +205,6 @@ int main(void)
      *
      *    Windows only: enumeration is the WSMan COM automation interface and
      *    has no port yet (PSRP-37). Everything else here is portable. */
-#ifdef PSRP_TEST_HAVE_ENUMERATE
     {
         winrm_shell_info_t *shells = NULL;
         size_t shell_count = 0, k;
@@ -226,9 +229,6 @@ int main(void)
             goto done;
         }
     }
-#else
-    printf("skipping enumeration: no WS-Enumerate client here\n");
-#endif
 
     /* 6. Disconnect and come back (3.1.4.9, 3.1.4.10.2). The shell keeps
      *    running on the server in between, so this is the one part of the

@@ -21,7 +21,6 @@
  * which is why it now runs on both platforms. */
 #ifdef _WIN32
 #  include <windows.h>
-#  define PSRP_TEST_HAVE_ENUMERATE 1
 static void sleep_ms(unsigned ms) { Sleep(ms); }
 #else
 #  define _POSIX_C_SOURCE 199309L
@@ -48,16 +47,24 @@ static void sleep_ms(unsigned ms)
 
 /* WS-Management reports a ShellId as a string; PSRP's pool id is a GUID that
  * it puts there. Comparing them means formatting one and matching without
- * regard to case, which is how WinRM returns it. */
-#ifdef PSRP_TEST_HAVE_ENUMERATE
+ * regard to case, which is how WinRM returns it. ASCII-only on purpose: a
+ * GUID's alphabet is, and _stricmp/strcasecmp are spelled differently per
+ * platform for no benefit here. */
 static bool shell_is(const char *shell_id, const psrp_guid_t *pool)
 {
     char want[PSRP_GUID_BUF_SIZE];
+    size_t i;
+
     if (!shell_id || psrp_guid_format(pool, want, sizeof want) != PSRP_OK)
         return false;
-    return _stricmp(shell_id, want) == 0;
+    for (i = 0; want[i] && shell_id[i]; i++) {
+        char a = shell_id[i], b = want[i];
+        if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+        if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
+        if (a != b) return false;
+    }
+    return want[i] == shell_id[i];
 }
-#endif
 
 #include "psrp/psrp_crypto.h"
 
@@ -1139,10 +1146,8 @@ static int section_connect_new(psrp_transport_t *t)
     psrp_session_t *s1, *s2 = NULL;
     psrp_transport_t *t2 = NULL;
     winrm_config_t cfg;
-#ifdef PSRP_TEST_HAVE_ENUMERATE
     winrm_shell_info_t *shells = NULL;
     size_t shell_count = 0, k;
-#endif
     psrp_guid_t pool_id;
     psrp_buffer_t payload, resp;
     seen_t seen;
@@ -1179,7 +1184,6 @@ static int section_connect_new(psrp_transport_t *t)
     cfg.password = getenv("PSRP_PASS");
     cfg.operation_timeout_ms = 60000;
 
-#ifdef PSRP_TEST_HAVE_ENUMERATE
     /* Discover it the way a stranger would: by enumeration. */
     if (winrm_enumerate_shells(&cfg, &shells, &shell_count) != PSRP_OK) {
         printf("  FAIL: enumerate\n");
@@ -1196,14 +1200,6 @@ static int section_connect_new(psrp_transport_t *t)
         printf("  FAIL: the disconnected pool was not enumerated\n");
         goto done;
     }
-#else
-    /* Enumeration is the WSMan COM automation interface and has no port
-     * (PSRP-37), so the discovery step is skipped here. What this section
-     * is really about -- adopting a ShellId nobody in this process created,
-     * connecting to it and running in it -- follows either way. */
-    (void)found;
-    printf("  (skipping enumeration: no WS-Enumerate client here)\n");
-#endif
 
     /* Second client adopts and connects. */
     if (psrp_transport_over_winrm(&cfg, &t2) != PSRP_OK) {
@@ -1298,9 +1294,7 @@ static int section_connect_new(psrp_transport_t *t)
     bad = 0;
 
 done:
-#ifdef PSRP_TEST_HAVE_ENUMERATE
     winrm_shell_info_free_all(shells, shell_count);
-#endif
     if (t2) (void)psrp_transport_close_shell(t2);
     psrp_session_free(s2);
     psrp_transport_free(t2);

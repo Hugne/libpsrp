@@ -1554,3 +1554,280 @@ done:
     psrp_buffer_free(&reply);
     return rc;
 }
+
+/* ---------------------------------------------------------- enumerate --- */
+/*
+ * WS-Enumerate over the shell resource: how a client finds shells it did not
+ * create. The Windows client reaches this through the WSMan COM automation
+ * interface, which the flat C API does not cover; here it is ordinary SOAP,
+ * like everything else in this file.
+ *
+ * OptimizeEnumeration asks the server to put the first batch of items in the
+ * EnumerateResponse rather than making the client Pull for them. A server may
+ * decline, so the Pull loop exists regardless and the optimisation only saves
+ * a round trip.
+ */
+
+#define WS_ENUM "http://schemas.xmlsoap.org/ws/2004/09/enumeration"
+
+/* The shell resource. Note the capitalisation: PSRP spells PowerShell
+ * lowercase in creationXml and the resource URI carries it capitalised, and
+ * the server matches the URI exactly. */
+#define SHELL_RESOURCE_URI \
+    "http://schemas.microsoft.com/wbem/wsman/1/windows/shell"
+
+struct winrm_enumerator {
+    winrm_session_t *s;
+};
+
+psrp_result_t winrm_enumerator_open(const winrm_config_t *cfg,
+                                    winrm_enumerator_t **out)
+{
+    winrm_enumerator_t *e;
+    psrp_result_t rc;
+
+    if (!out) return PSRP_ERR_INVALID_ARG;
+    *out = NULL;
+
+    e = (winrm_enumerator_t *)calloc(1, sizeof *e);
+    if (!e) return PSRP_ERR_NOMEM;
+
+    rc = winrm_session_open(cfg, &e->s);
+    if (rc != PSRP_OK) { free(e); return rc; }
+
+    *out = e;
+    return PSRP_OK;
+}
+
+void winrm_enumerator_free(winrm_enumerator_t *e)
+{
+    if (!e) return;
+    winrm_session_free(e->s);
+    free(e);
+}
+
+/* Envelope for an Enumerate or a Pull. These address the SHELL resource
+ * rather than PowerShell's, so envelope_head cannot build them. */
+static psrp_result_t enum_envelope(winrm_session_t *t, psrp_buffer_t *b,
+                                   const char *action, const char *body)
+{
+    char msgid[PSRP_GUID_BUF_SIZE];
+    psrp_guid_t id;
+    char *head;
+    psrp_result_t rc;
+    size_t cap = 4096;
+
+    if (psrp_guid_generate(&id) != PSRP_OK) return PSRP_ERR_INTERNAL;
+    if (psrp_guid_format(&id, msgid, sizeof msgid) != PSRP_OK)
+        return PSRP_ERR_INTERNAL;
+
+    head = (char *)malloc(cap);
+    if (!head) return PSRP_ERR_NOMEM;
+
+    snprintf(head, cap,
+        "<s:Envelope xmlns:s=\"http://www.w3.org/2003/05/soap-envelope\""
+        " xmlns:wsa=\"http://schemas.xmlsoap.org/ws/2004/08/addressing\""
+        " xmlns:wsman=\"http://schemas.dmtf.org/wbem/wsman/1/wsman.xsd\""
+        " xmlns:wsen=\"" WS_ENUM "\""
+        " xmlns:p=\"http://schemas.microsoft.com/wbem/wsman/1/wsman.xsd\">"
+        "<s:Header>"
+        "<wsa:To>%s</wsa:To>"
+        "<wsman:ResourceURI s:mustUnderstand=\"true\">" SHELL_RESOURCE_URI
+            "</wsman:ResourceURI>"
+        "<wsa:ReplyTo><wsa:Address s:mustUnderstand=\"true\">"
+            "http://schemas.xmlsoap.org/ws/2004/08/addressing/role/anonymous"
+            "</wsa:Address></wsa:ReplyTo>"
+        "<wsa:Action s:mustUnderstand=\"true\">%s</wsa:Action>"
+        "<wsman:MaxEnvelopeSize s:mustUnderstand=\"true\">%d"
+            "</wsman:MaxEnvelopeSize>"
+        "<wsa:MessageID>uuid:%s</wsa:MessageID>"
+        "<wsman:Locale xml:lang=\"en-US\" s:mustUnderstand=\"false\"/>"
+        "<p:SessionId s:mustUnderstand=\"false\">uuid:%s</p:SessionId>"
+        "<wsman:OperationTimeout>PT%u.000S</wsman:OperationTimeout>"
+        "</s:Header><s:Body>",
+        t->url, action, MAX_ENVELOPE_SIZE, msgid, t->session_id,
+        t->timeout_ms / 1000u);
+
+    rc = psrp_buffer_append_str(b, head);
+    free(head);
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(b, body);
+    if (rc == PSRP_OK) rc = psrp_buffer_append_str(b, "</s:Body></s:Envelope>");
+    if (rc == PSRP_OK) rc = psrp_buffer_append_u8(b, 0);
+    return rc;
+}
+
+/* Does this text appear anywhere in the reply? The reply is not NUL
+ * terminated, so this cannot be strstr. */
+static bool reply_contains(const char *p, size_t n, const char *want)
+{
+    size_t wl = strlen(want);
+    size_t i;
+
+    if (wl > n) return false;
+    for (i = 0; i + wl <= n; i++)
+        if (memcmp(p + i, want, wl) == 0) return true;
+    return false;
+}
+
+/* Finds the next <Shell ...> or </Shell> tag, whatever namespace prefix the
+ * server chose to bind. Returns a pointer to its opening angle bracket. */
+static const char *find_shell_tag(const char *p, const char *end, bool closing)
+{
+    for (; p + 7 < end; p++) {
+        const char *name, *scan;
+
+        if (*p != '<') continue;
+        scan = p + 1;
+        if (closing) {
+            if (*scan != '/') continue;
+            scan++;
+        } else if (*scan == '/') {
+            continue;
+        }
+
+        /* Skip an optional namespace prefix. */
+        name = scan;
+        while (scan < end && *scan != ':' && *scan != ' ' &&
+               *scan != '>' && *scan != '/')
+            scan++;
+        if (scan < end && *scan == ':') name = scan + 1;
+
+        if ((size_t)(end - name) < 6) return NULL;
+        if (memcmp(name, "Shell", 5) != 0) continue;
+        if (name[5] != ' ' && name[5] != '>' && name[5] != '/') continue;
+        return p;
+    }
+    return NULL;
+}
+
+/* Collects every Shell element in a reply and appends the ones that name a
+ * shell. Each element's own XML goes to the shared parser, so both backends
+ * read a record the same way. */
+static psrp_result_t collect_shells(const char *xml, size_t len,
+                                    winrm_shell_info_t **list, size_t *used,
+                                    size_t *cap)
+{
+    const char *p = xml, *end = xml + len;
+
+    for (;;) {
+        const char *open = find_shell_tag(p, end, false);
+        const char *close, *gt;
+        winrm_shell_info_t info;
+
+        if (!open) break;
+        close = find_shell_tag(open + 1, end, true);
+        if (!close) break;
+        gt = (const char *)memchr(close, '>', (size_t)(end - close));
+        if (!gt) break;
+        close = gt + 1;
+
+        if (winrm_parse_shell(open, (size_t)(close - open), &info) == PSRP_OK) {
+            if (*used == *cap) {
+                size_t next = *cap ? *cap * 2 : 8;
+                winrm_shell_info_t *grown = (winrm_shell_info_t *)
+                    realloc(*list, next * sizeof *grown);
+                if (!grown) {
+                    winrm_shell_info_free(&info);
+                    return PSRP_ERR_NOMEM;
+                }
+                *list = grown;
+                *cap = next;
+            }
+            (*list)[(*used)++] = info;
+        }
+        p = close;
+    }
+    return PSRP_OK;
+}
+
+psrp_result_t winrm_enumerator_shells(winrm_enumerator_t *e,
+                                      winrm_shell_info_t **out, size_t *count)
+{
+    winrm_shell_info_t *list = NULL;
+    size_t used = 0, cap = 0;
+    psrp_buffer_t soap, reply, ctx;
+    psrp_result_t rc;
+    int round;
+
+    if (!e || !out || !count) return PSRP_ERR_INVALID_ARG;
+    *out = NULL;
+    *count = 0;
+
+    psrp_buffer_init(&ctx);
+    psrp_buffer_init(&soap);
+    psrp_buffer_init(&reply);
+
+    rc = enum_envelope(e->s, &soap, WS_ENUM "/Enumerate",
+                       "<wsen:Enumerate>"
+                       "<wsman:OptimizeEnumeration/>"
+                       "<wsman:MaxElements>32</wsman:MaxElements>"
+                       "</wsen:Enumerate>");
+    if (rc != PSRP_OK) goto done;
+    rc = soap_call(e->s, (const char *)soap.data, &reply, false);
+    if (rc != PSRP_OK) goto done;
+
+    /* Bounded: a server that kept handing back a context and never said
+     * EndOfSequence would otherwise spin here forever. */
+    for (round = 0; round < 64; round++) {
+        char *body;
+
+        rc = collect_shells((const char *)reply.data, reply.len,
+                            &list, &used, &cap);
+        if (rc != PSRP_OK) goto done;
+
+        /* EndOfSequence is an EMPTY element, so it has no text for
+         * element_text to find; its presence is the whole signal. */
+        if (reply_contains((const char *)reply.data, reply.len,
+                           "EndOfSequence"))
+            break;
+
+        psrp_buffer_reset(&ctx);
+        if (element_text(reply.data, reply.len, "EnumerationContext", &ctx)
+                != PSRP_OK || !ctx.len)
+            break;
+        if (psrp_buffer_append_u8(&ctx, 0) != PSRP_OK) {
+            rc = PSRP_ERR_NOMEM;
+            goto done;
+        }
+
+        body = (char *)malloc(ctx.len + 160);
+        if (!body) { rc = PSRP_ERR_NOMEM; goto done; }
+        snprintf(body, ctx.len + 160,
+                 "<wsen:Pull><wsen:EnumerationContext>%s"
+                 "</wsen:EnumerationContext>"
+                 "<wsen:MaxElements>32</wsen:MaxElements></wsen:Pull>",
+                 (const char *)ctx.data);
+
+        psrp_buffer_reset(&soap);
+        psrp_buffer_reset(&reply);
+        rc = enum_envelope(e->s, &soap, WS_ENUM "/Pull", body);
+        free(body);
+        if (rc != PSRP_OK) goto done;
+        rc = soap_call(e->s, (const char *)soap.data, &reply, false);
+        if (rc != PSRP_OK) goto done;
+    }
+
+    *out = list;
+    *count = used;
+    list = NULL;
+    used = 0;
+
+done:
+    winrm_shell_info_free_all(list, used);
+    psrp_buffer_free(&ctx);
+    psrp_buffer_free(&soap);
+    psrp_buffer_free(&reply);
+    return rc;
+}
+
+psrp_result_t winrm_enumerate_shells(const winrm_config_t *cfg,
+                                     winrm_shell_info_t **out, size_t *count)
+{
+    winrm_enumerator_t *e = NULL;
+    psrp_result_t rc = winrm_enumerator_open(cfg, &e);
+
+    if (rc != PSRP_OK) return rc;
+    rc = winrm_enumerator_shells(e, out, count);
+    winrm_enumerator_free(e);
+    return rc;
+}
