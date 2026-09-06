@@ -98,11 +98,13 @@ library:
     cmake -S . -B build -DPSRP_STATIC_OPENSSL=ON
 
 They are separate flags because the two are not equally available. libxml2
-links statically almost anywhere. A static libcrypto needs the distribution to
-have packaged archives for OpenSSL's own private dependencies, and Debian and
-Ubuntu do not ship `libjitterentropy.a` at all; `PSRP_STATIC_OPENSSL` detects
-that during configure and reports it, rather than producing undefined `jent_*`
-symbols at link time.
+links statically almost anywhere. A static libcrypto needs archives for
+OpenSSL's own private dependencies, and whether those exist depends on how
+OpenSSL was built rather than on the distribution: Ubuntu 26.04's OpenSSL 3.5
+is built against jitterentropy and `libjitterentropy.a` is not packaged, so it
+cannot link, while 24.04's OpenSSL 3.0 does not reference it and links fine.
+`PSRP_STATIC_OPENSSL` decides during configure and reports the reason, rather
+than producing undefined `jent_*` symbols at link time.
 
 Neither produces a fully static binary: libc stays dynamic, deliberately,
 because statically linking glibc breaks NSS and locale lookups at run time.

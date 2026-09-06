@@ -143,12 +143,14 @@ else()
     find_library(OPENSSL_ARCHIVE NAMES libcrypto.a REQUIRED)
     set(PSRP_OPENSSL_STATIC_LIBS ${OPENSSL_ARCHIVE} z zstd dl pthread)
 
-    # Whether that archive can actually be linked depends on the packaging of
-    # OpenSSL's private dependencies, and the usual failure is a wall of
-    # undefined jent_* symbols at link time because the distribution built
-    # OpenSSL against jitterentropy without shipping libjitterentropy.a.
-    # Finding that out at configure time, with a name attached, beats finding
-    # it out in the middle of a build.
+    # Whether that archive can actually be linked depends on how OpenSSL was
+    # built, not on which distribution it came from. An OpenSSL built against
+    # jitterentropy leaves undefined jent_* symbols unless libjitterentropy.a
+    # is also packaged, and it usually is not -- Ubuntu 26.04's OpenSSL 3.5
+    # does exactly that, while 24.04's 3.0 does not reference jent_ at all and
+    # links cleanly. So this is a property of the build in front of you, and
+    # neither outcome is a defect. Finding out at configure time, with a name
+    # attached, beats finding out in the middle of a build.
     include(CheckCSourceCompiles)
     set(CMAKE_REQUIRED_LIBRARIES ${PSRP_OPENSSL_STATIC_LIBS})
     check_c_source_compiles(
@@ -160,10 +162,11 @@ int main(void){return EVP_aes_256_cbc()?0:1;}"
       message(FATAL_ERROR
         "PSRP_STATIC_OPENSSL=ON but ${OPENSSL_ARCHIVE} will not link. "
         "OpenSSL's own private dependencies are probably missing their static "
-        "archives -- on Debian and Ubuntu libjitterentropy.a is not packaged "
-        "at all, which makes a static libcrypto unbuildable there. Use "
-        "PSRP_STATIC_LIBXML2 alone, or build against an OpenSSL whose "
-        "dependencies ship archives.")
+        "archives; the usual case is an OpenSSL built against jitterentropy "
+        "where libjitterentropy.a is not packaged, which is true of Ubuntu "
+        "26.04's OpenSSL 3.5 and not of 24.04's 3.0. Use PSRP_STATIC_LIBXML2 "
+        "alone, or build against an OpenSSL whose dependencies ship "
+        "archives.")
     endif()
     target_link_libraries(psrp PUBLIC ${PSRP_OPENSSL_STATIC_LIBS})
     target_include_directories(psrp SYSTEM PRIVATE ${OPENSSL_INCLUDE_DIRS})
