@@ -28,7 +28,16 @@ typedef enum psrp_result {
     PSRP_ERR_UNSUPPORTED = -9,   /**< well-formed but not implemented (see TODO.md) */
 
     /** subsystem errors */
-    PSRP_ERR_TRANSPORT = -10,
+    PSRP_ERR_TRANSPORT = -10,   /**< the carrier failed for some other reason */
+    /** The server refused the credentials, or none could be obtained.
+     *
+     * Separate from PSRP_ERR_TRANSPORT because it is the one failure a caller
+     * can usually do something about, and because "transport error" for a
+     * mistyped password tells nobody anything. */
+    PSRP_ERR_AUTH = -13,
+    /** The endpoint could not be reached: the name did not resolve, the
+     * connection was refused, or it timed out before any reply. */
+    PSRP_ERR_UNREACHABLE = -14,
     PSRP_ERR_CRYPTO = -11,
     PSRP_ERR_XML = -12,
 

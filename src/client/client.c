@@ -294,6 +294,7 @@ psrp_result_t psrp_client_connect(const psrp_client_config_t *cfg,
     wcfg.username = cfg->username;
     wcfg.password = cfg->password;
     wcfg.operation_timeout_ms = cfg->operation_timeout_ms;
+    wcfg.insecure_tls = cfg->insecure_tls;
 
     rc = psrp_transport_over_winrm(&wcfg, &c->t);
     if (rc != PSRP_OK) {

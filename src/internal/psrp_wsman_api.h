@@ -177,6 +177,14 @@ DWORD WINAPI WSManCreateSession(
     WSMAN_PROXY_INFO *proxyInfo, WSMAN_SESSION_HANDLE *session);
 DWORD WINAPI WSManCloseSession(WSMAN_SESSION_HANDLE session, DWORD flags);
 
+/* Session options are an enum in wsman.h; only the two this client sets are
+ * named here, by their values from that header:
+ *   18 WSMAN_OPTION_SKIP_CA_CHECK
+ *   19 WSMAN_OPTION_SKIP_CN_CHECK
+ * Both take a DWORD of 1 to disable the check. */
+DWORD WINAPI WSManSetSessionOption(WSMAN_SESSION_HANDLE session, int option,
+                                   WSMAN_DATA *data);
+
 void WINAPI WSManCreateShell(
     WSMAN_SESSION_HANDLE session, DWORD flags, PCWSTR resourceUri,
     WSMAN_SHELL_STARTUP_INFO *startupInfo, WSMAN_OPTION_SET *options,

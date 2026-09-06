@@ -28,16 +28,21 @@ deferral and every place the spec and real PowerShell disagree.
 - Shell enumeration: the WSMan COM automation interface on Windows, because
   the flat WSMan C API does not cover it, and WS-Enumerate over SOAP
   elsewhere.
+- Failures are distinguishable from the return code alone:
+  `PSRP_ERR_AUTH` for refused credentials, `PSRP_ERR_UNREACHABLE` for an
+  endpoint that is not there, and the rest for what they say.
 
 Authentication is NTLM, Kerberos or SPNEGO. On Linux, Kerberos works from a
 ticket cache with no password in the process; message encryption is on for
 every request on both platforms.
 
 HTTP and HTTPS endpoints both work, and message encryption is applied over
-either — WinRM accepts it over TLS as well. There is no API for configuring
-TLS trust, though: certificates are verified against the system store, so a
-server using a self-signed certificate needs that certificate installed there.
-See TODO PSRP-47.
+either — WinRM accepts it over TLS as well. Certificates are verified against
+the system store by default. `insecure_tls` turns that off for a server whose
+certificate cannot be verified, which is the common WinRM deployment; it
+leaves the connection encrypted but no longer authenticates the peer, so
+anything able to intercept the route can present its own certificate and be
+believed.
 
 ## Servers
 

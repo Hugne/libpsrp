@@ -79,6 +79,19 @@ typedef struct winrm_config {
     uint32_t operation_timeout_ms;
     /** Zero is DEFAULT. */
     winrm_auth_t auth;
+    /** Accept the server's TLS certificate without verifying it.
+     *
+     * Off by default, and it should stay off wherever the certificate can be
+     * trusted properly, because it removes exactly what TLS was there to
+     * provide: with this set the connection is still encrypted but the peer
+     * is no longer authenticated, so anything able to intercept the route can
+     * present its own certificate and be believed.
+     *
+     * It exists because the common WinRM deployment is a self-signed
+     * certificate, and the alternative for a caller is installing that
+     * certificate into the machine's trust store from outside this library.
+     * Ignored for http:// endpoints, which have no certificate to check. */
+    bool insecure_tls;
 } winrm_config_t;
 
 /** The resource this shell speaks. PSRP passes PowerShell's URI; another

@@ -183,6 +183,7 @@ struct winrm_session {
     gss_OID require;    /* mechanism SPNEGO must settle on, or NULL */
     winrm_auth_t negotiated; /* what the context actually used */
     bool authenticated;
+    bool insecure_tls;      /* caller asked not to verify the certificate */
 
     /* What the server calls this shell, read back from the Create response
      * rather than assumed to be the id we asked for. WinRM is free to assign
@@ -313,6 +314,13 @@ static psrp_result_t http_post(winrm_session_t *t, const char *ctype,
     curl_easy_setopt(t->curl, CURLOPT_WRITEFUNCTION, on_body);
     curl_easy_setopt(t->curl, CURLOPT_WRITEDATA, t);
     curl_easy_setopt(t->curl, CURLOPT_TIMEOUT_MS, (long)t->timeout_ms);
+    if (t->insecure_tls) {
+        /* Both, deliberately. Verifying the name on a certificate nothing
+         * vouched for proves nothing, so turning one off and leaving the
+         * other would only look safer than it is. */
+        curl_easy_setopt(t->curl, CURLOPT_SSL_VERIFYPEER, 0L);
+        curl_easy_setopt(t->curl, CURLOPT_SSL_VERIFYHOST, 0L);
+    }
     if (getenv("PSRP_HTTP_TRACE"))
         curl_easy_setopt(t->curl, CURLOPT_VERBOSE, 1L);
 
@@ -321,7 +329,17 @@ static psrp_result_t http_post(winrm_session_t *t, const char *ctype,
 
     if (cc != CURLE_OK) {
         set_error(t, "http", curl_easy_strerror(cc));
-        return PSRP_ERR_TRANSPORT;
+        /* Tell "nobody is listening there" apart from "the carrier broke",
+         * because they are different problems for whoever has to fix them. */
+        switch (cc) {
+        case CURLE_COULDNT_RESOLVE_HOST:
+        case CURLE_COULDNT_RESOLVE_PROXY:
+        case CURLE_COULDNT_CONNECT:
+        case CURLE_OPERATION_TIMEDOUT:
+            return PSRP_ERR_UNREACHABLE;
+        default:
+            return PSRP_ERR_TRANSPORT;
+        }
     }
     curl_easy_getinfo(t->curl, CURLINFO_RESPONSE_CODE, status);
     return PSRP_OK;
@@ -365,7 +383,10 @@ static psrp_result_t authenticate(winrm_session_t *t)
     gss_buffer_desc in_tok, out_tok;
     psrp_buffer_t b64;
     int round;
-    psrp_result_t rc = PSRP_ERR_TRANSPORT;
+    /* Anything that goes wrong in here is a credential problem as far as a
+     * caller is concerned: the mechanism would not start, the server refused
+     * the token, or the exchange ran out of rounds. */
+    psrp_result_t rc = PSRP_ERR_AUTH;
 
     in_tok.value = NULL;
     in_tok.length = 0;
@@ -388,6 +409,7 @@ static psrp_result_t authenticate(winrm_session_t *t)
                                      NULL, &out_tok, NULL, NULL);
         if (GSS_ERROR(major)) {
             set_gss_error(t, "gss_init_sec_context", major, minor);
+            rc = PSRP_ERR_AUTH;
             goto done;
         }
         if (getenv("PSRP_GSS_TRACE"))
@@ -435,12 +457,12 @@ static psrp_result_t authenticate(winrm_session_t *t)
         if (!produced) {
             set_error(t, "authenticate",
                       "mechanism wants another round but produced no token");
-            rc = PSRP_ERR_TRANSPORT;
+            rc = PSRP_ERR_AUTH;
             goto done;
         }
         if (!t->challenge[0]) {
             set_error(t, "authenticate", "server sent no continuation token");
-            rc = PSRP_ERR_TRANSPORT;
+            rc = PSRP_ERR_AUTH;
             goto done;
         }
 
@@ -714,7 +736,9 @@ static psrp_result_t soap_call(winrm_session_t *t, const char *soap,
         }
         psrp_buffer_free(&fault);
         set_error(t, "soap", detail);
-        return PSRP_ERR_TRANSPORT;
+        /* A 401 here means the credentials were refused, whatever the body
+         * says; anything else is the server objecting to the request. */
+        return status == 401 ? PSRP_ERR_AUTH : PSRP_ERR_TRANSPORT;
     }
 
     return decrypt_body(t, t->resp.data, t->resp.len, reply);
@@ -822,6 +846,7 @@ psrp_result_t winrm_session_open(const winrm_config_t *cfg,
     }
     t->cred = GSS_C_NO_CREDENTIAL;
     t->target = GSS_C_NO_NAME;
+    t->insecure_tls = cfg && cfg->insecure_tls;
     t->timeout_ms = (cfg && cfg->operation_timeout_ms)
                         ? cfg->operation_timeout_ms : DEFAULT_TIMEOUT_MS;
     auth = cfg ? cfg->auth : WINRM_AUTH_DEFAULT;

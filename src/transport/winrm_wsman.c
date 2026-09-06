@@ -267,6 +267,28 @@ static void rx_destroy(recv_ctx_t *r)
     DeleteCriticalSection(&r->lock);
 }
 
+/* What a WSMan error code means to a caller.
+ *
+ * The names are WSMan's own, given here as numbers because the SDK headers
+ * that define them are not among the subset this file declares. Everything
+ * not listed is left as a transport failure, which is what it is. */
+static psrp_result_t classify(DWORD code)
+{
+    switch (code) {
+    case 0x8033809D:   /* ERROR_WSMAN_AUTHENTICATION_FAILED            */
+    case 0x80338106:   /* the user name or password is incorrect       */
+    case 0x8033810C:   /* access denied by the server                  */
+    case 0x80338104:   /* the client cannot connect: check credentials */
+        return PSRP_ERR_AUTH;
+    case 0x803381B9:   /* the server name cannot be resolved           */
+    case 0x80338012:   /* the client cannot connect to the destination */
+    case 0x800705B4:   /* the operation timed out                      */
+        return PSRP_ERR_UNREACHABLE;
+    default:
+        return PSRP_ERR_TRANSPORT;
+    }
+}
+
 static void set_error(winrm_session_t *t, const char *what, DWORD code,
                       const wchar_t *detail)
 {
@@ -346,6 +368,22 @@ psrp_result_t winrm_session_open(const winrm_config_t *cfg,
         set_error(t, "WSManCreateSession", rc, NULL);
         winrm_session_free(t);
         return PSRP_ERR_TRANSPORT;
+    }
+
+    if (cfg && cfg->insecure_tls) {
+        /* Revocation is left alone: whether a certificate has been revoked
+         * is a different question from whether it is trusted, and the caller
+         * did not ask about it.
+         *
+         * Both checks go together for the same reason curl's two are turned
+         * off together -- verifying the name on a certificate nothing vouched
+         * for proves nothing. */
+        WSMAN_DATA v;
+        memset(&v, 0, sizeof v);
+        v.type = WSMAN_DATA_TYPE_DWORD;
+        v.number = 1;
+        (void)WSManSetSessionOption(t->session, 18 /* SKIP_CA_CHECK */, &v);
+        (void)WSManSetSessionOption(t->session, 19 /* SKIP_CN_CHECK */, &v);
     }
 
     *out = t;
@@ -578,10 +616,10 @@ psrp_result_t winrm_shell_create(winrm_session_t *t,
                        &options, &create_xml, &async, &t->shell);
     if (WaitForSingleObject(op.done, t->timeout_ms) != WAIT_OBJECT_0) {
         set_error(t, "WSManCreateShellEx", 0, L"timed out");
-        rc = PSRP_ERR_TRANSPORT;
+        rc = classify(op.error);
     } else if (op.error != 0) {
         set_error(t, "WSManCreateShellEx", op.error, op.detail);
-        rc = PSRP_ERR_TRANSPORT;
+        rc = classify(op.error);
     }
     op_destroy(&op);
     free(creation);
@@ -665,10 +703,10 @@ psrp_result_t winrm_command(winrm_session_t *t, const char *command_id,
                            NULL, &async, &t->command);
     if (WaitForSingleObject(op.done, t->timeout_ms) != WAIT_OBJECT_0) {
         set_error(t, "WSManRunShellCommandEx", 0, L"timed out");
-        rc = PSRP_ERR_TRANSPORT;
+        rc = classify(op.error);
     } else if (op.error != 0) {
         set_error(t, "WSManRunShellCommandEx", op.error, op.detail);
-        rc = PSRP_ERR_TRANSPORT;
+        rc = classify(op.error);
     }
     op_destroy(&op);
     free(cmdline_w);
@@ -708,10 +746,10 @@ static psrp_result_t send_on_stream(winrm_session_t *t, PCWSTR stream,
                         &async, &send_op);
     if (WaitForSingleObject(op.done, t->timeout_ms) != WAIT_OBJECT_0) {
         set_error(t, "WSManSendShellInput", 0, L"timed out");
-        rc = PSRP_ERR_TRANSPORT;
+        rc = classify(op.error);
     } else if (op.error != 0) {
         set_error(t, "WSManSendShellInput", op.error, op.detail);
-        rc = PSRP_ERR_TRANSPORT;
+        rc = classify(op.error);
     }
     if (send_op) WSManCloseOperation(send_op, 0);
     op_destroy(&op);
@@ -753,10 +791,10 @@ psrp_result_t winrm_signal(winrm_session_t *t, const char *code)
     WSManSignalShell(t->shell, t->command, 0, code_w, &async, &sig);
     if (WaitForSingleObject(op.done, t->timeout_ms) != WAIT_OBJECT_0) {
         set_error(t, "WSManSignalShell", 0, L"timed out");
-        rc = PSRP_ERR_TRANSPORT;
+        rc = classify(op.error);
     } else if (op.error != 0) {
         set_error(t, "WSManSignalShell", op.error, op.detail);
-        rc = PSRP_ERR_TRANSPORT;
+        rc = classify(op.error);
     }
     if (sig) WSManCloseOperation(sig, 0);
     op_destroy(&op);
@@ -780,10 +818,10 @@ static psrp_result_t run_shell_op(winrm_session_t *t, const char *what,
     start(t, &async);
     if (WaitForSingleObject(op.done, t->timeout_ms) != WAIT_OBJECT_0) {
         set_error(t, what, 0, L"timed out");
-        rc = PSRP_ERR_TRANSPORT;
+        rc = classify(op.error);
     } else if (op.error != 0) {
         set_error(t, what, op.error, op.detail);
-        rc = PSRP_ERR_TRANSPORT;
+        rc = classify(op.error);
     }
     op_destroy(&op);
     return rc;
@@ -947,10 +985,10 @@ psrp_result_t winrm_connect(winrm_session_t *t,
                       &async, &t->shell);
     if (WaitForSingleObject(op.done, t->timeout_ms) != WAIT_OBJECT_0) {
         set_error(t, "WSManConnectShell", 0, L"timed out");
-        rc = PSRP_ERR_TRANSPORT;
+        rc = classify(op.error);
     } else if (op.error != 0) {
         set_error(t, "WSManConnectShell", op.error, op.detail);
-        rc = PSRP_ERR_TRANSPORT;
+        rc = classify(op.error);
     } else {
         rc = PSRP_OK;
     }
@@ -1040,10 +1078,10 @@ psrp_result_t winrm_shell_delete(winrm_session_t *t)
     WSManCloseShell(t->shell, 0, &async);
     if (WaitForSingleObject(op.done, t->timeout_ms) != WAIT_OBJECT_0) {
         set_error(t, "WSManCloseShell", 0, L"timed out");
-        rc = PSRP_ERR_TRANSPORT;
+        rc = classify(op.error);
     } else if (op.error != 0) {
         set_error(t, "WSManCloseShell", op.error, op.detail);
-        rc = PSRP_ERR_TRANSPORT;
+        rc = classify(op.error);
     }
     op_destroy(&op);
     t->shell = NULL;   /* closed exactly once */

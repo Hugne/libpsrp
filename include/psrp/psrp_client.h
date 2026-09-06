@@ -59,6 +59,9 @@ typedef struct psrp_client_config {
     uint32_t open_timeout_ms;
     /** How long psrp_client_run waits for a pipeline. 0 means 60000. */
     uint32_t run_timeout_ms;
+    /** Accept the server's TLS certificate without verifying it; see the
+     * warning on winrm_config_t. Off by default. */
+    bool insecure_tls;
 } psrp_client_config_t;
 
 /** One of the non-output streams, as text in arrival order. */

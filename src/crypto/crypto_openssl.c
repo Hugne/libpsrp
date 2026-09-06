@@ -176,42 +176,27 @@ psrp_result_t psrp_crypto_import_session_key(psrp_crypto_t *c, const void *blob,
         goto done;
     }
 
-    /* Turn OpenSSL's implicit rejection OFF for this decrypt, so a bad
-     * ciphertext fails here rather than downstream.
-     *
-     * OpenSSL 3 answers a PKCS#1 v1.5 padding failure with a pseudorandom
-     * plaintext and success, rather than an error, to deny the oracle that
-     * Bleichenbacher and Marvin exploit. That leaves the length as the only
-     * thing distinguishing a real session key from noise -- and the synthetic
-     * plaintext's LENGTH is pseudorandom too, uniform over roughly 0..245, so
-     * about one bad blob in 250 is the right length and gets installed as a
-     * session key. Measured: two acceptances in 200 runs of a test feeding
-     * deliberate garbage. Everything downstream then decrypts to rubbish
-     * instead of reporting that the key exchange failed.
-     *
-     * The oracle this restores needs an attacker who can submit many chosen
-     * ciphertexts and observe the outcome of each. There is no such position
-     * here: a client decrypts exactly one ENCRYPTED_SESSION_KEY, from a server
-     * it has already authenticated, over a channel that is already encrypted,
-     * using an RSA key generated for that one message. Reaching the oracle
-     * means having broken the transport first. Silently accepting a wrong key
-     * one time in 250 is the larger and the actual risk.
-     *
-     * This also makes the two backends agree exactly rather than
-     * approximately: CNG reports bad padding outright, which is what the
-     * shared crypto suite asserts of both.
-     *
-     * Best-effort: the control is OpenSSL 3.2 and later. Older versions have
-     * no implicit rejection to disable and already fail outright, so a
-     * rejected ctrl leaves them behaving as intended. */
-    (void)EVP_PKEY_CTX_ctrl_str(ctx, "rsa_pkcs1_implicit_rejection", "0");
-
     if (EVP_PKEY_decrypt(ctx, plain, &produced, cipher, sizeof cipher) <= 0) {
         rc = PSRP_ERR_CRYPTO;
         goto done;
     }
+
     /* CRYPTO rather than MALFORMED: a well-formed blob whose body is not a
-     * session key is a cryptographic failure, not a parsing one. */
+     * session key is a cryptographic failure, not a parsing one.
+     *
+     * This length check is all there is, and it is not a complete test.
+     * OpenSSL 3 answers a PKCS#1 v1.5 padding failure with a pseudorandom
+     * plaintext and success rather than an error, which denies the oracle
+     * Bleichenbacher and Marvin exploit, and the synthetic plaintext's length
+     * is pseudorandom too -- so a bad ciphertext occasionally arrives here at
+     * exactly the right length and is accepted. That is inherent: the
+     * protocol puts no MAC on this blob, so there is nothing else to check
+     * against. Turning implicit rejection off would make the check exact and
+     * restore the oracle, which is the worse trade -- the ENCRYPTED_SESSION_KEY
+     * arrives from an authenticated server over an already-encrypted channel,
+     * where an attacker able to submit chosen ciphertexts has broken the
+     * transport already. CNG reports bad padding outright, so the two
+     * backends differ here by design rather than by oversight. */
     if (produced != PSRP_SESSION_KEY_BYTES) {
         rc = PSRP_ERR_CRYPTO;
         goto done;

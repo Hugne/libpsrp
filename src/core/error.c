@@ -14,6 +14,8 @@ const char *psrp_strerror(psrp_result_t rc)
     case PSRP_ERR_OVERFLOW:     return "value exceeds limit";
     case PSRP_ERR_UNSUPPORTED:  return "unsupported";
     case PSRP_ERR_TRANSPORT:    return "transport error";
+    case PSRP_ERR_AUTH:         return "authentication failed";
+    case PSRP_ERR_UNREACHABLE:  return "endpoint unreachable";
     case PSRP_ERR_CRYPTO:       return "crypto error";
     case PSRP_ERR_XML:          return "xml error";
     case PSRP_ERR_INTERNAL:     return "internal error";

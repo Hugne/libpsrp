@@ -34,6 +34,7 @@ int main(int argc, char **argv)
     const char *conn = NULL, *user = NULL, *pass = NULL;
     int status = 1;
     int i;
+    psrp_result_t rc;
 
     if (argc < 5) {
         fprintf(stderr,
@@ -53,8 +54,12 @@ int main(int argc, char **argv)
     cfg.username = user;
     cfg.password = pass;
 
-    if (psrp_client_connect(&cfg, &c) != PSRP_OK) {
-        fprintf(stderr, "connect failed\n");
+    rc = psrp_client_connect(&cfg, &c);
+    if (rc != PSRP_OK) {
+        /* The return code carries the diagnosis: refused credentials, an
+         * endpoint that is not there and a protocol failure are three
+         * different codes rather than one "connect failed" for all of them. */
+        fprintf(stderr, "connect to %s failed: %s\n", conn, psrp_strerror(rc));
         goto done;
     }
 

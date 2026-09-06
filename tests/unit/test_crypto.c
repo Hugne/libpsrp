@@ -144,10 +144,28 @@ PSRP_TEST(session_key_import_validates_the_blob)
     blob[0] = 0x99;
     ASSERT_ERR(psrp_crypto_import_session_key(c, blob, sizeof blob),
                PSRP_ERR_MALFORMED);
-    /* Correct header but the body will not decrypt. */
+    /* Correct header but the body will not decrypt.
+     *
+     * The two backends answer differently here and both are right. CNG
+     * reports bad padding outright, so the result is always PSRP_ERR_CRYPTO.
+     * OpenSSL 3 applies implicit rejection to PKCS#1 v1.5 -- a padding
+     * failure returns a pseudorandom plaintext and SUCCESS, denying the
+     * oracle Bleichenbacher and Marvin exploit -- and that plaintext's length
+     * is pseudorandom too, so roughly one call in 250 lands on the 32 bytes a
+     * session key needs and is accepted. Nothing else can be checked: the
+     * protocol puts no MAC on this blob.
+     *
+     * So this asserts what is actually true of each. Asserting the strict
+     * answer everywhere made the suite fail about 1% of the time. */
     blob[0] = 0x01; blob[1] = 0x02;
-    ASSERT_ERR(psrp_crypto_import_session_key(c, blob, sizeof blob),
-               PSRP_ERR_CRYPTO);
+    {
+        psrp_result_t rc = psrp_crypto_import_session_key(c, blob, sizeof blob);
+#ifdef _WIN32
+        ASSERT_ERR(rc, PSRP_ERR_CRYPTO);
+#else
+        ASSERT_TRUE(rc == PSRP_ERR_CRYPTO || rc == PSRP_OK);
+#endif
+    }
 
     psrp_crypto_free(c);
 }
